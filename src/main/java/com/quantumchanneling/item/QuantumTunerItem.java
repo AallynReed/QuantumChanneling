@@ -1,8 +1,13 @@
 package com.quantumchanneling.item;
 
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
+import com.quantumchanneling.channel.ModMessages;
+import com.quantumchanneling.channel.OpenChannelsRequestPacket;
+import com.quantumchanneling.channel.QuantumChannel;
+import com.quantumchanneling.channel.ChannelData;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionResultHolder;
@@ -20,6 +25,7 @@ import java.util.UUID;
 
 public class QuantumTunerItem extends Item {
     private static final String TAG_CHANNEL = "Channel";
+    private static final String TAG_NAME = "ChannelName";
 
     public QuantumTunerItem(Properties properties) {
         super(properties);
@@ -29,12 +35,36 @@ public class QuantumTunerItem extends Item {
         return stack.hasTag() && stack.getTag().hasUUID(TAG_CHANNEL) ? stack.getTag().getUUID(TAG_CHANNEL) : null;
     }
 
+    public static String getStoredName(ItemStack stack) {
+        return stack.hasTag() && stack.getTag().contains(TAG_NAME) ? stack.getTag().getString(TAG_NAME) : "";
+    }
+
+    /** Sets the channel UUID. Caller should also call {@link #setStoredName(ItemStack, String)}. */
     public static void setStoredChannel(ItemStack stack, @Nullable UUID id) {
         if (id == null) {
-            if (stack.hasTag()) stack.getTag().remove(TAG_CHANNEL);
+            if (stack.hasTag()) {
+                stack.getTag().remove(TAG_CHANNEL);
+                stack.getTag().remove(TAG_NAME);
+            }
         } else {
             stack.getOrCreateTag().putUUID(TAG_CHANNEL, id);
         }
+    }
+
+    public static void setStoredName(ItemStack stack, String name) {
+        if (name == null || name.isEmpty()) {
+            if (stack.hasTag()) stack.getTag().remove(TAG_NAME);
+        } else {
+            stack.getOrCreateTag().putString(TAG_NAME, name);
+        }
+    }
+
+    /** Server-side helper: refresh the cached name from ChannelData. */
+    public static void refreshCachedName(ItemStack stack, MinecraftServer server) {
+        UUID id = getStoredChannel(stack);
+        if (id == null) return;
+        QuantumChannel net = ChannelData.get(server).getChannel(id);
+        setStoredName(stack, net == null ? "" : net.name());
     }
 
     private static String shortId(UUID id) {
@@ -55,12 +85,15 @@ public class QuantumTunerItem extends Item {
         ItemStack stack = ctx.getItemInHand();
         UUID tunerChannel = getStoredChannel(stack);
         UUID deviceChannel = bound.getChannelId();
+        MinecraftServer server = level.getServer();
+        ChannelData data = server != null ? ChannelData.get(server) : null;
 
         if (player.isShiftKeyDown()) {
             if (deviceChannel != null) {
                 bound.setChannelId(null);
                 player.displayClientMessage(
-                        Component.translatable("message.quantumchanneling.tuner.unbound", shortId(deviceChannel)),
+                        Component.translatable("message.quantumchanneling.tuner.unbound",
+                                nameOrShort(data, deviceChannel)),
                         true);
             } else {
                 player.displayClientMessage(
@@ -72,15 +105,21 @@ public class QuantumTunerItem extends Item {
         if (tunerChannel != null) {
             bound.setChannelId(tunerChannel);
             player.displayClientMessage(
-                    Component.translatable("message.quantumchanneling.tuner.bound", shortId(tunerChannel)),
+                    Component.translatable("message.quantumchanneling.tuner.bound",
+                            nameOrShort(data, tunerChannel)),
                     true);
             return InteractionResult.CONSUME;
         }
 
         if (deviceChannel != null) {
             setStoredChannel(stack, deviceChannel);
+            if (data != null) {
+                QuantumChannel dn = data.getChannel(deviceChannel);
+                setStoredName(stack, dn == null ? "" : dn.name());
+            }
             player.displayClientMessage(
-                    Component.translatable("message.quantumchanneling.tuner.copied", shortId(deviceChannel)),
+                    Component.translatable("message.quantumchanneling.tuner.copied",
+                            nameOrShort(data, deviceChannel)),
                     true);
             return InteractionResult.CONSUME;
         }
@@ -94,20 +133,29 @@ public class QuantumTunerItem extends Item {
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
         if (!player.isShiftKeyDown()) return InteractionResultHolder.pass(stack);
-        if (level.isClientSide) return InteractionResultHolder.success(stack);
-
-        UUID newId = UUID.randomUUID();
-        setStoredChannel(stack, newId);
-        player.displayClientMessage(
-                Component.translatable("message.quantumchanneling.tuner.created", shortId(newId)), true);
+        // Shift+right-click in air -> open the Networks UI. Request happens client-side so the
+        // server replies with a ShowChannelsListPacket that triggers the screen.
+        if (level.isClientSide) {
+            ModMessages.sendToServer(new OpenChannelsRequestPacket());
+        }
         return InteractionResultHolder.success(stack);
+    }
+
+    private static Component nameOrShort(@Nullable ChannelData data, UUID id) {
+        if (data != null) {
+            QuantumChannel net = data.getChannel(id);
+            if (net != null) return Component.literal(net.name());
+        }
+        return Component.literal(shortId(id));
     }
 
     @Override
     public void appendHoverText(ItemStack stack, @Nullable Level level, List<Component> tooltip, TooltipFlag flag) {
         UUID id = getStoredChannel(stack);
         if (id != null) {
-            tooltip.add(Component.translatable("tooltip.quantumchanneling.tuner.channel", shortId(id))
+            String name = getStoredName(stack);
+            String label = name.isEmpty() ? shortId(id) : name;
+            tooltip.add(Component.translatable("tooltip.quantumchanneling.tuner.channel", label)
                     .withStyle(ChatFormatting.AQUA));
         } else {
             tooltip.add(Component.translatable("tooltip.quantumchanneling.tuner.no_channel")

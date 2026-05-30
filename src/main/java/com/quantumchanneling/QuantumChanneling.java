@@ -5,9 +5,14 @@ import com.quantumchanneling.block.PhotonEmitterBlock;
 import com.quantumchanneling.block.PhotonReceiverBlock;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import com.quantumchanneling.blockentity.PhotonReceiverBlockEntity;
+import com.quantumchanneling.client.PhotonNodeScreen;
 import com.quantumchanneling.item.QuantumTunerItem;
+import com.quantumchanneling.menu.PhotonNodeMenu;
+import com.quantumchanneling.channel.ModMessages;
+import net.minecraft.client.gui.screens.MenuScreens;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.CreativeModeTab;
 import net.minecraft.world.item.CreativeModeTabs;
@@ -17,12 +22,18 @@ import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.material.MapColor;
+import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.common.extensions.IForgeMenuType;
+import net.minecraftforge.common.world.ForgeChunkManager;
+import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.server.ServerStartingEvent;
+import com.quantumchanneling.channel.ChannelData;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.config.ModConfig;
+import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.event.lifecycle.FMLCommonSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import net.minecraftforge.registries.DeferredRegister;
@@ -39,6 +50,8 @@ public class QuantumChanneling {
     public static final DeferredRegister<Item> ITEMS = DeferredRegister.create(ForgeRegistries.ITEMS, MODID);
     public static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES =
             DeferredRegister.create(ForgeRegistries.BLOCK_ENTITY_TYPES, MODID);
+    public static final DeferredRegister<MenuType<?>> MENU_TYPES =
+            DeferredRegister.create(ForgeRegistries.MENU_TYPES, MODID);
     public static final DeferredRegister<CreativeModeTab> CREATIVE_MODE_TABS =
             DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
@@ -76,6 +89,9 @@ public class QuantumChanneling {
             BLOCK_ENTITIES.register("photon_receiver",
                     () -> BlockEntityType.Builder.of(PhotonReceiverBlockEntity::new, PHOTON_RECEIVER.get()).build(null));
 
+    public static final RegistryObject<MenuType<PhotonNodeMenu>> PHOTON_NODE_MENU = MENU_TYPES.register("photon_node",
+            () -> IForgeMenuType.create(PhotonNodeMenu::new));
+
     public static final RegistryObject<CreativeModeTab> QUANTUM_TAB = CREATIVE_MODE_TABS.register("quantum_tab",
             () -> CreativeModeTab.builder()
                     .withTabsBefore(CreativeModeTabs.COMBAT)
@@ -94,6 +110,7 @@ public class QuantumChanneling {
         BLOCKS.register(modEventBus);
         ITEMS.register(modEventBus);
         BLOCK_ENTITIES.register(modEventBus);
+        MENU_TYPES.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
 
         modEventBus.addListener(this::commonSetup);
@@ -101,15 +118,36 @@ public class QuantumChanneling {
         MinecraftForge.EVENT_BUS.register(this);
 
         context.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+
+        // Validate forced-chunk tickets on world load. Keep all of them — owning BlockEntities
+        // re-sync their own ticket state on onLoad(), which cleans up any orphan in either direction.
+        ForgeChunkManager.setForcedChunkLoadingCallback(MODID, (level, helper) -> {
+            // intentional no-op
+        });
     }
 
     private void commonSetup(final FMLCommonSetupEvent event) {
-        LOGGER.info("Quantum Channeling: common setup complete (photon cost per op = {} PE, cross-dim = {})",
-                Config.photonCostPerOperation, Config.allowCrossDimension);
+        event.enqueueWork(ModMessages::register);
+        LOGGER.info("Quantum Channeling: common setup complete (emitter push = {} FE/t, receiver out = {} FE/t, cross-dim = {})",
+                Config.emitterPushRate, Config.receiverOutputRate, Config.allowCrossDimension);
     }
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         LOGGER.info("Quantum Channeling: server starting");
+    }
+
+    @SubscribeEvent
+    public void onServerTick(TickEvent.ServerTickEvent event) {
+        if (event.phase != TickEvent.Phase.END) return;
+        ChannelData.get(event.getServer()).tickCharging(event.getServer());
+    }
+
+    @Mod.EventBusSubscriber(modid = MODID, bus = Mod.EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
+    public static class ClientEvents {
+        @SubscribeEvent
+        public static void onClientSetup(FMLClientSetupEvent event) {
+            event.enqueueWork(() -> MenuScreens.register(PHOTON_NODE_MENU.get(), PhotonNodeScreen::new));
+        }
     }
 }

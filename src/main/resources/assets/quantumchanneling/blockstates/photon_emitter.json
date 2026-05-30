@@ -1,5 +1,10 @@
 {
   "variants": {
-    "": { "model": "quantumchanneling:block/photon_emitter" }
+    "facing=up":    { "model": "quantumchanneling:block/photon_emitter" },
+    "facing=down":  { "model": "quantumchanneling:block/photon_emitter", "x": 180 },
+    "facing=north": { "model": "quantumchanneling:block/photon_emitter", "x": 90 },
+    "facing=south": { "model": "quantumchanneling:block/photon_emitter", "x": 90, "y": 180 },
+    "facing=east":  { "model": "quantumchanneling:block/photon_emitter", "x": 90, "y": 90 },
+    "facing=west":  { "model": "quantumchanneling:block/photon_emitter", "x": 90, "y": 270 }
   }
 }

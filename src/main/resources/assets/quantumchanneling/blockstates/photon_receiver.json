@@ -1,5 +1,10 @@
 {
   "variants": {
-    "": { "model": "quantumchanneling:block/photon_receiver" }
+    "facing=up":    { "model": "quantumchanneling:block/photon_receiver" },
+    "facing=down":  { "model": "quantumchanneling:block/photon_receiver", "x": 180 },
+    "facing=north": { "model": "quantumchanneling:block/photon_receiver", "x": 90 },
+    "facing=south": { "model": "quantumchanneling:block/photon_receiver", "x": 90, "y": 180 },
+    "facing=east":  { "model": "quantumchanneling:block/photon_receiver", "x": 90, "y": 90 },
+    "facing=west":  { "model": "quantumchanneling:block/photon_receiver", "x": 90, "y": 270 }
   }
 }

@@ -1,6 +1,22 @@
 {
-  "parent": "minecraft:block/cube_all",
+  "parent": "block/block",
   "textures": {
-    "all": "quantumchanneling:block/photon_emitter"
-  }
+    "front": "quantumchanneling:block/photon_emitter_front",
+    "back": "quantumchanneling:block/photon_emitter_back",
+    "particle": "quantumchanneling:block/photon_emitter_front"
+  },
+  "elements": [
+    {
+      "from": [2, 0, 2],
+      "to": [14, 3, 14],
+      "faces": {
+        "up":    { "texture": "#front" },
+        "down":  { "texture": "#back" },
+        "north": { "texture": "#back" },
+        "south": { "texture": "#back" },
+        "east":  { "texture": "#back" },
+        "west":  { "texture": "#back" }
+      }
+    }
+  ]
 }
