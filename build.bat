@@ -14,10 +14,11 @@ if not exist "%JAVA_HOME%\bin\java.exe" (
 
 echo [build.bat] Using JDK at "%JAVA_HOME%"
 
-REM No args -> default to 'build'. Otherwise forward whatever was passed
-REM (e.g. build.bat runClient, build.bat clean build, build.bat genIntellijRuns).
+REM No args -> build and deploy the jar into deploy_dir (gradle.properties).
+REM Otherwise forward whatever was passed (e.g. build.bat runClient,
+REM build.bat clean build, build.bat genIntellijRuns).
 if "%~1"=="" (
-    call "%~dp0gradlew.bat" build
+    call "%~dp0gradlew.bat" build deployJar
 ) else (
     call "%~dp0gradlew.bat" %*
 )

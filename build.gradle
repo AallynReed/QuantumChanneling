@@ -205,3 +205,45 @@ publishing {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
 }
+
+// Copies the reobfuscated mod jar into the folder configured by `deploy_dir`
+// (gradle.properties). Skipped if the property is blank or the folder is missing,
+// so the task is safe on machines that don't have the target instance.
+tasks.register('deployJar') {
+    group = 'forge'
+    description = 'Copy the reobfuscated mod jar into deploy_dir (e.g. a Minecraft instance mods folder).'
+    dependsOn 'reobfJar'
+
+    doLast {
+        def deployDirProp = project.findProperty('deploy_dir')
+        if (deployDirProp == null || deployDirProp.toString().trim().isEmpty()) {
+            logger.lifecycle("[deployJar] Skipped: 'deploy_dir' is not set in gradle.properties.")
+            return
+        }
+        File target = file(deployDirProp.toString())
+        if (!target.exists() || !target.isDirectory()) {
+            logger.warn("[deployJar] Skipped: deploy_dir does not exist or is not a directory: ${target.absolutePath}")
+            return
+        }
+
+        File srcJar = tasks.jar.archiveFile.get().asFile
+        if (!srcJar.exists()) {
+            logger.warn("[deployJar] Skipped: built jar not found at ${srcJar.absolutePath}")
+            return
+        }
+
+        target.listFiles()?.findAll {
+            it.isFile() && it.name.startsWith("${mod_id}-") && it.name.endsWith(".jar")
+        }?.each {
+            logger.lifecycle("[deployJar] Removing old: ${it.name}")
+            it.delete()
+        }
+
+        File dst = new File(target, srcJar.name)
+        java.nio.file.Files.copy(
+                srcJar.toPath(),
+                dst.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        logger.lifecycle("[deployJar] Deployed ${srcJar.name} -> ${target.absolutePath}")
+    }
+}
