@@ -1,0 +1,18 @@
+{
+  "parent": "block/block",
+  "textures": {
+    "fill":     "quantumchanneling:block/photon_storage_fill",
+    "particle": "quantumchanneling:block/photon_storage_fill"
+  },
+  "elements": [
+    {
+      "__comment": "fill step 6 â€” 1 unit tall, visible when LEVEL >= 6",
+      "from": [5, 9, 5], "to": [11, 10, 11],
+      "faces": {
+        "down":  { "texture": "#fill", "emissivity": 15 }, "up":    { "texture": "#fill", "emissivity": 15 },
+        "north": { "texture": "#fill", "emissivity": 15 }, "south": { "texture": "#fill", "emissivity": 15 },
+        "east":  { "texture": "#fill", "emissivity": 15 }, "west":  { "texture": "#fill", "emissivity": 15 }
+      }
+    }
+  ]
+}

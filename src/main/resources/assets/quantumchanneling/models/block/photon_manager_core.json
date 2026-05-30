@@ -1,0 +1,101 @@
+{
+  "parent": "block/block",
+  "textures": {
+    "core":     "quantumchanneling:block/photon_core_dark",
+    "gold":     "quantumchanneling:block/photon_accent_gold",
+    "blue":     "quantumchanneling:block/photon_accent_blue",
+    "particle": "quantumchanneling:block/photon_core_dark"
+  },
+  "elements": [
+    {
+      "__comment": "glowing brain — 6×6×6 emissive blue core suspended inside the containment frame",
+      "from": [5, 5, 5], "to": [11, 11, 11],
+      "faces": {
+        "down":  { "texture": "#blue", "emissivity": 15 }, "up":    { "texture": "#blue", "emissivity": 15 },
+        "north": { "texture": "#blue", "emissivity": 15 }, "south": { "texture": "#blue", "emissivity": 15 },
+        "east":  { "texture": "#blue", "emissivity": 15 }, "west":  { "texture": "#blue", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "gold equator belt — full 16×16 ring at the orb's midline",
+      "from": [0, 7, 0], "to": [16, 9, 16],
+      "faces": {
+        "down":  { "texture": "#gold", "emissivity": 15 }, "up":    { "texture": "#gold", "emissivity": 15 },
+        "north": { "texture": "#gold", "emissivity": 15 }, "south": { "texture": "#gold", "emissivity": 15 },
+        "east":  { "texture": "#gold", "emissivity": 15 }, "west":  { "texture": "#gold", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "dark vertical pillar — front-left, connects bottom plate to top plate",
+      "from": [1, 1, 1], "to": [3, 15, 3],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "dark vertical pillar — front-right",
+      "from": [13, 1, 1], "to": [15, 15, 3],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "dark vertical pillar — back-left",
+      "from": [1, 1, 13], "to": [3, 15, 15],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "dark vertical pillar — back-right",
+      "from": [13, 1, 13], "to": [15, 15, 15],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "dark bottom plate",
+      "from": [1, 0, 1], "to": [15, 1, 15],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "dark top plate",
+      "from": [1, 15, 1], "to": [15, 16, 15],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "blue control panel inset on top — emissive readout",
+      "from": [4, 16, 4], "to": [12, 17, 12],
+      "faces": {
+        "down":  { "texture": "#blue", "emissivity": 15 }, "up":    { "texture": "#blue", "emissivity": 15 },
+        "north": { "texture": "#blue", "emissivity": 15 }, "south": { "texture": "#blue", "emissivity": 15 },
+        "east":  { "texture": "#blue", "emissivity": 15 }, "west":  { "texture": "#blue", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "gold central dial on the front face — control input",
+      "from": [6, 9, 0], "to": [10, 13, 1],
+      "faces": {
+        "down":  { "texture": "#gold", "emissivity": 15 }, "up":    { "texture": "#gold", "emissivity": 15 },
+        "north": { "texture": "#gold", "emissivity": 15 }, "south": { "texture": "#gold", "emissivity": 15 },
+        "east":  { "texture": "#gold", "emissivity": 15 }, "west":  { "texture": "#gold", "emissivity": 15 }
+      }
+    }
+  ]
+}

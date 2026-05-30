@@ -1,0 +1,81 @@
+{
+  "parent": "block/block",
+  "textures": {
+    "core":     "quantumchanneling:block/photon_core_dark",
+    "particle": "quantumchanneling:block/photon_core_dark"
+  },
+  "elements": [
+    {
+      "__comment": "central glowing orb (4×4×4) — emissive accent, floats inside the containment frame",
+      "from": [6, 6, 6], "to": [10, 10, 10],
+      "faces": {
+        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#accent", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "horizontal containment ring at the equator — surrounds the orb",
+      "from": [4, 7, 4], "to": [12, 9, 12],
+      "faces": {
+        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#accent", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "dark corner pillar — front-left (connects bottom stud to top stud)",
+      "from": [4, 4, 4], "to": [5, 12, 5],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "dark corner pillar — front-right",
+      "from": [11, 4, 4], "to": [12, 12, 5],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "dark corner pillar — back-left",
+      "from": [4, 4, 11], "to": [5, 12, 12],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "dark corner pillar — back-right",
+      "from": [11, 4, 11], "to": [12, 12, 12],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "top accent stud — energy port, visible from UP",
+      "from": [6, 11, 6], "to": [10, 12, 10],
+      "faces": {
+        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#accent", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "bottom accent stud — energy port, visible from DOWN",
+      "from": [6, 4, 6], "to": [10, 5, 10],
+      "faces": {
+        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#accent", "emissivity": 15 }
+      }
+    }
+  ]
+}

@@ -2,11 +2,12 @@ package com.quantumchanneling.block;
 
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
-import net.minecraft.Util;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.util.RandomSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -22,57 +23,72 @@ import net.minecraft.world.level.block.entity.BlockEntityTicker;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
-import net.minecraft.world.level.block.state.properties.BlockStateProperties;
-import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.network.NetworkHooks;
 import org.jetbrains.annotations.Nullable;
-
-import java.util.EnumMap;
-import java.util.Map;
+import org.joml.Vector3f;
 
 public class PhotonEmitterBlock extends Block implements EntityBlock {
-    public static final DirectionProperty FACING = BlockStateProperties.FACING;
-
-    private static final Map<Direction, VoxelShape> SHAPES = Util.make(new EnumMap<>(Direction.class), m -> {
-        m.put(Direction.UP,    Block.box(2, 0, 2, 14, 3, 14));
-        m.put(Direction.DOWN,  Block.box(2, 13, 2, 14, 16, 14));
-        m.put(Direction.NORTH, Block.box(2, 2, 13, 14, 14, 16));
-        m.put(Direction.SOUTH, Block.box(2, 2, 0, 14, 14, 3));
-        m.put(Direction.EAST,  Block.box(13, 2, 2, 16, 14, 14));
-        m.put(Direction.WEST,  Block.box(0, 2, 2, 3, 14, 14));
-    });
-
     public PhotonEmitterBlock(Properties properties) {
         super(properties);
-        registerDefaultState(stateDefinition.any().setValue(FACING, Direction.UP));
+        registerDefaultState(PhotonShape.defaultStateOff(stateDefinition.any()));
     }
 
     @Override
     protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> b) {
-        b.add(FACING);
+        PhotonShape.registerProps(b);
     }
 
     @Override
     public @Nullable BlockState getStateForPlacement(BlockPlaceContext ctx) {
-        return defaultBlockState().setValue(FACING, ctx.getClickedFace());
+        // FACING = the face of the existing block that was clicked. The new block sits adjacent
+        // on that face; its OPPOSITE side touches the mounting surface. Connections are filled
+        // in by onPlace() once the world can be queried.
+        return defaultBlockState().setValue(PhotonShape.FACING, ctx.getClickedFace());
+    }
+
+    @Override
+    public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
+        super.onPlace(state, level, pos, oldState, isMoving);
+        if (level.isClientSide) return;
+        level.setBlock(pos, PhotonShape.refreshConnections(level, pos, state, PhotonShape.ConnectionMode.SOURCES), 3);
+    }
+
+    @Override
+    public void neighborChanged(BlockState state, Level level, BlockPos pos, Block neighborBlock, BlockPos neighborPos, boolean moving) {
+        super.neighborChanged(state, level, pos, neighborBlock, neighborPos, moving);
+        if (level.isClientSide) return;
+        BlockState updated = PhotonShape.refreshConnections(level, pos, state, PhotonShape.ConnectionMode.SOURCES);
+        if (updated != state) level.setBlock(pos, updated, 3);
     }
 
     @Override
     public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
-        return SHAPES.get(state.getValue(FACING));
+        return PhotonShape.shape(state);
+    }
+
+    /** Blue accent particles drifting around the orb — sells the "contained light source" feel. */
+    @Override
+    public void animateTick(BlockState state, Level level, BlockPos pos, RandomSource random) {
+        if (random.nextInt(8) != 0) return;
+        Vector3f color = new Vector3f(0.31f, 0.63f, 1.0f);    // emitter accent (blue)
+        DustParticleOptions opts = new DustParticleOptions(color, 1.0f);
+        double x = pos.getX() + 0.5 + (random.nextDouble() - 0.5) * 0.55;
+        double y = pos.getY() + 0.5 + (random.nextDouble() - 0.5) * 0.45;
+        double z = pos.getZ() + 0.5 + (random.nextDouble() - 0.5) * 0.55;
+        level.addParticle(opts, x, y, z, 0, 0.015, 0);
     }
 
     @Override
     public BlockState rotate(BlockState state, Rotation rot) {
-        return state.setValue(FACING, rot.rotate(state.getValue(FACING)));
+        return state.setValue(PhotonShape.FACING, rot.rotate(state.getValue(PhotonShape.FACING)));
     }
 
     @Override
     public BlockState mirror(BlockState state, Mirror mirror) {
-        return state.rotate(mirror.getRotation(state.getValue(FACING)));
+        return state.rotate(mirror.getRotation(state.getValue(PhotonShape.FACING)));
     }
 
     @Override
@@ -88,14 +104,28 @@ public class PhotonEmitterBlock extends Block implements EntityBlock {
     }
 
     @Override
+    public void onRemove(BlockState oldState, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
+        if (!oldState.is(newState.getBlock())
+                && level.getBlockEntity(pos) instanceof com.quantumchanneling.blockentity.ChannelBoundBlockEntity bound) {
+            bound.unbindFromChannelOnBreak();
+        }
+        super.onRemove(oldState, level, pos, newState, isMoving);
+    }
+
+    @Override
     public InteractionResult use(BlockState state, Level level, BlockPos pos, Player player, InteractionHand hand, BlockHitResult hit) {
         if (level.isClientSide) return InteractionResult.SUCCESS;
         BlockEntity be = level.getBlockEntity(pos);
         if (be instanceof PhotonEmitterBlockEntity emitter && player instanceof ServerPlayer sp) {
             NetworkHooks.openScreen(sp, emitter, buf -> {
                 buf.writeBlockPos(pos);
+                java.util.UUID id = emitter.getChannelId();
+                buf.writeBoolean(id != null);
+                if (id != null) buf.writeUUID(id);
                 buf.writeUtf(emitter.resolveChannelName());
                 buf.writeUtf(emitter.resolveChannelOwner());
+                buf.writeUtf(emitter.getCustomName());
+                buf.writeLong(0L);
             });
         }
         return InteractionResult.CONSUME;

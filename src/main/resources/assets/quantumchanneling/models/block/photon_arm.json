@@ -1,0 +1,22 @@
+{
+  "parent": "block/block",
+  "textures": {
+    "arm":      "quantumchanneling:block/photon_arm",
+    "cap":      "quantumchanneling:block/photon_accent_blue",
+    "particle": "quantumchanneling:block/photon_arm"
+  },
+  "elements": [
+    {
+      "__comment": "connector stub — 4x4 cross-section, extends from the core (y=11) to the block face (y=16). Default orientation points UP; blockstate rotates per CONN_* direction.",
+      "from": [6, 11, 6], "to": [10, 16, 10],
+      "faces": {
+        "down":  { "texture": "#cap" },
+        "up":    { "texture": "#cap" },
+        "north": { "texture": "#arm" },
+        "south": { "texture": "#arm" },
+        "east":  { "texture": "#arm" },
+        "west":  { "texture": "#arm" }
+      }
+    }
+  ]
+}

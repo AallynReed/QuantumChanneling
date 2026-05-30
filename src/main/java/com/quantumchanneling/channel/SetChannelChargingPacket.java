@@ -7,8 +7,9 @@ import net.minecraftforge.network.NetworkEvent;
 import java.util.UUID;
 import java.util.function.Supplier;
 
-public record SetChannelChargingPacket(UUID id, int modeOrdinal) {
-    public static void encode(SetChannelChargingPacket p, FriendlyByteBuf b) { b.writeUUID(p.id); b.writeVarInt(p.modeOrdinal); }
+/** Set a channel's charging-slot bitmask (HAND / HOTBAR / INVENTORY / ARMOR). */
+public record SetChannelChargingPacket(UUID id, int slotMask) {
+    public static void encode(SetChannelChargingPacket p, FriendlyByteBuf b) { b.writeUUID(p.id); b.writeVarInt(p.slotMask); }
     public static SetChannelChargingPacket decode(FriendlyByteBuf b) { return new SetChannelChargingPacket(b.readUUID(), b.readVarInt()); }
     public static void handle(SetChannelChargingPacket p, Supplier<NetworkEvent.Context> sup) {
         NetworkEvent.Context ctx = sup.get();
@@ -16,7 +17,7 @@ public record SetChannelChargingPacket(UUID id, int modeOrdinal) {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
             ChannelData.get(player.serverLevel().getServer())
-                    .setChargingMode(p.id, player.getUUID(), ChargingMode.byOrdinal(p.modeOrdinal));
+                    .setChargingSlots(p.id, player.getUUID(), p.slotMask);
             CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);

@@ -2,6 +2,12 @@
   "replace": false,
   "values": [
     "quantumchanneling:photon_emitter",
-    "quantumchanneling:photon_receiver"
+    "quantumchanneling:photon_receiver",
+    "quantumchanneling:photon_storage_1",
+    "quantumchanneling:photon_storage_2",
+    "quantumchanneling:photon_storage_3",
+    "quantumchanneling:photon_storage_4",
+    "quantumchanneling:photon_storage_5",
+    "quantumchanneling:photon_manager"
   ]
 }

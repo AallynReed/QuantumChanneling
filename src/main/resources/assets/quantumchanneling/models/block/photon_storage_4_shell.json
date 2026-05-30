@@ -1,0 +1,6 @@
+{
+  "parent": "quantumchanneling:block/photon_storage_shell",
+  "textures": {
+    "accent": "quantumchanneling:block/photon_accent_diamond"
+  }
+}

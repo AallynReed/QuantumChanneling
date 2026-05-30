@@ -1,12 +1,17 @@
 package com.quantumchanneling;
 
 import com.mojang.logging.LogUtils;
+import com.quantumchanneling.block.PhotonManagerBlock;
 import com.quantumchanneling.block.PhotonEmitterBlock;
 import com.quantumchanneling.block.PhotonReceiverBlock;
+import com.quantumchanneling.block.PhotonStorageBlock;
+import com.quantumchanneling.blockentity.PhotonManagerBlockEntity;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import com.quantumchanneling.blockentity.PhotonReceiverBlockEntity;
+import com.quantumchanneling.blockentity.PhotonStorageBlockEntity;
+import com.quantumchanneling.item.PhotonBlockItem;
+import com.quantumchanneling.item.TooltipItem;
 import com.quantumchanneling.client.PhotonNodeScreen;
-import com.quantumchanneling.item.QuantumTunerItem;
 import com.quantumchanneling.menu.PhotonNodeMenu;
 import com.quantumchanneling.channel.ModMessages;
 import net.minecraft.client.gui.screens.MenuScreens;
@@ -56,30 +61,88 @@ public class QuantumChanneling {
             DeferredRegister.create(Registries.CREATIVE_MODE_TAB, MODID);
 
     public static final RegistryObject<Item> QUANTUM_CORE = ITEMS.register("quantum_core",
-            () -> new Item(new Item.Properties()));
+            () -> new TooltipItem(new Item.Properties(), "tooltip.quantumchanneling.quantum_core"));
 
-    public static final RegistryObject<Item> QUANTUM_TUNER = ITEMS.register("quantum_tuner",
-            () -> new QuantumTunerItem(new Item.Properties().stacksTo(1)));
+    /** True when any of the 6 PhotonShape connection booleans is set — drives the lit/dim glow on emitter/receiver. */
+    private static boolean hasAnyConnection(net.minecraft.world.level.block.state.BlockState state) {
+        try {
+            for (net.minecraft.core.Direction d : net.minecraft.core.Direction.values()) {
+                if (state.getValue(com.quantumchanneling.block.PhotonShape.connProp(d))) return true;
+            }
+        } catch (Exception ignored) {}
+        return false;
+    }
 
     public static final RegistryObject<Block> PHOTON_EMITTER = BLOCKS.register("photon_emitter",
             () -> new PhotonEmitterBlock(BlockBehaviour.Properties.of()
                     .mapColor(MapColor.COLOR_BLUE)
                     .strength(3.0f, 6.0f)
                     .sound(SoundType.METAL)
-                    .requiresCorrectToolForDrops()));
+                    .requiresCorrectToolForDrops()
+                    // Emits a soft glow when any connection arm is live.
+                    .lightLevel(state -> hasAnyConnection(state) ? 7 : 3)));
 
     public static final RegistryObject<Item> PHOTON_EMITTER_ITEM = ITEMS.register("photon_emitter",
-            () -> new BlockItem(PHOTON_EMITTER.get(), new Item.Properties()));
+            () -> new PhotonBlockItem(PHOTON_EMITTER.get(), new Item.Properties(),
+                    "tooltip.quantumchanneling.photon_emitter"));
 
     public static final RegistryObject<Block> PHOTON_RECEIVER = BLOCKS.register("photon_receiver",
             () -> new PhotonReceiverBlock(BlockBehaviour.Properties.of()
                     .mapColor(MapColor.COLOR_CYAN)
                     .strength(3.0f, 6.0f)
                     .sound(SoundType.METAL)
-                    .requiresCorrectToolForDrops()));
+                    .requiresCorrectToolForDrops()
+                    .lightLevel(state -> hasAnyConnection(state) ? 7 : 3)));
 
     public static final RegistryObject<Item> PHOTON_RECEIVER_ITEM = ITEMS.register("photon_receiver",
-            () -> new BlockItem(PHOTON_RECEIVER.get(), new Item.Properties()));
+            () -> new PhotonBlockItem(PHOTON_RECEIVER.get(), new Item.Properties(),
+                    "tooltip.quantumchanneling.photon_receiver"));
+
+    // Photon Storage — five tiers (Copper / Iron / Gold / Diamond / Emerald). Capacities live in
+    // Config (Config.storageCapacities, indexed by tier-1) so they're user-tunable up to Long.MAX_VALUE
+    // (~9.2 quintillion). Storage is NOT exposed as an IEnergyStorage capability — see
+    // PhotonStorageBlockEntity — so the long ceiling is real, not bound by the int-based FE interface.
+    private static RegistryObject<Block> registerStorageTier(String id, int tier, MapColor mc) {
+        RegistryObject<Block> block = BLOCKS.register(id, () -> new PhotonStorageBlock(
+                BlockBehaviour.Properties.of()
+                        .mapColor(mc)
+                        .strength(3.0f, 6.0f)
+                        .sound(SoundType.METAL)
+                        .requiresCorrectToolForDrops()
+                        // Bright proportional to fill bucket (0..8) — full storage = light level 15.
+                        .lightLevel(state -> {
+                            try { return Math.min(15, state.getValue(PhotonStorageBlock.LEVEL) * 2); }
+                            catch (Exception e) { return 0; }
+                        }),
+                tier));
+        ITEMS.register(id, () -> new PhotonBlockItem(block.get(), new Item.Properties(),
+                "tooltip.quantumchanneling.photon_storage"));
+        return block;
+    }
+
+    public static final RegistryObject<Block> PHOTON_STORAGE_T1 =
+            registerStorageTier("photon_storage_1", 1, MapColor.COLOR_ORANGE);
+    public static final RegistryObject<Block> PHOTON_STORAGE_T2 =
+            registerStorageTier("photon_storage_2", 2, MapColor.COLOR_LIGHT_GRAY);
+    public static final RegistryObject<Block> PHOTON_STORAGE_T3 =
+            registerStorageTier("photon_storage_3", 3, MapColor.COLOR_YELLOW);
+    public static final RegistryObject<Block> PHOTON_STORAGE_T4 =
+            registerStorageTier("photon_storage_4", 4, MapColor.DIAMOND);
+    public static final RegistryObject<Block> PHOTON_STORAGE_T5 =
+            registerStorageTier("photon_storage_5", 5, MapColor.EMERALD);
+
+    public static final RegistryObject<Block> PHOTON_MANAGER = BLOCKS.register("photon_manager",
+            () -> new PhotonManagerBlock(BlockBehaviour.Properties.of()
+                    .mapColor(MapColor.COLOR_LIGHT_BLUE)
+                    .strength(3.0f, 6.0f)
+                    .sound(SoundType.METAL)
+                    .requiresCorrectToolForDrops()
+                    // Manager always glows softly — it's the brain of the channel.
+                    .lightLevel(state -> 10)));
+
+    public static final RegistryObject<Item> PHOTON_MANAGER_ITEM = ITEMS.register("photon_manager",
+            () -> new PhotonBlockItem(PHOTON_MANAGER.get(), new Item.Properties(),
+                    "tooltip.quantumchanneling.photon_manager"));
 
     public static final RegistryObject<BlockEntityType<PhotonEmitterBlockEntity>> PHOTON_EMITTER_BE =
             BLOCK_ENTITIES.register("photon_emitter",
@@ -88,6 +151,16 @@ public class QuantumChanneling {
     public static final RegistryObject<BlockEntityType<PhotonReceiverBlockEntity>> PHOTON_RECEIVER_BE =
             BLOCK_ENTITIES.register("photon_receiver",
                     () -> BlockEntityType.Builder.of(PhotonReceiverBlockEntity::new, PHOTON_RECEIVER.get()).build(null));
+
+    public static final RegistryObject<BlockEntityType<PhotonStorageBlockEntity>> PHOTON_STORAGE_BE =
+            BLOCK_ENTITIES.register("photon_storage",
+                    () -> BlockEntityType.Builder.of(PhotonStorageBlockEntity::new,
+                            PHOTON_STORAGE_T1.get(), PHOTON_STORAGE_T2.get(), PHOTON_STORAGE_T3.get(),
+                            PHOTON_STORAGE_T4.get(), PHOTON_STORAGE_T5.get()).build(null));
+
+    public static final RegistryObject<BlockEntityType<PhotonManagerBlockEntity>> PHOTON_MANAGER_BE =
+            BLOCK_ENTITIES.register("photon_manager",
+                    () -> BlockEntityType.Builder.of(PhotonManagerBlockEntity::new, PHOTON_MANAGER.get()).build(null));
 
     public static final RegistryObject<MenuType<PhotonNodeMenu>> PHOTON_NODE_MENU = MENU_TYPES.register("photon_node",
             () -> IForgeMenuType.create(PhotonNodeMenu::new));
@@ -99,9 +172,14 @@ public class QuantumChanneling {
                     .icon(() -> QUANTUM_CORE.get().getDefaultInstance())
                     .displayItems((parameters, output) -> {
                         output.accept(QUANTUM_CORE.get());
-                        output.accept(QUANTUM_TUNER.get());
                         output.accept(PHOTON_EMITTER_ITEM.get());
                         output.accept(PHOTON_RECEIVER_ITEM.get());
+                        output.accept(PHOTON_STORAGE_T1.get());
+                        output.accept(PHOTON_STORAGE_T2.get());
+                        output.accept(PHOTON_STORAGE_T3.get());
+                        output.accept(PHOTON_STORAGE_T4.get());
+                        output.accept(PHOTON_STORAGE_T5.get());
+                        output.accept(PHOTON_MANAGER_ITEM.get());
                     }).build());
 
     public QuantumChanneling(FMLJavaModLoadingContext context) {

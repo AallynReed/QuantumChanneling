@@ -1,0 +1,6 @@
+{
+  "parent": "quantumchanneling:block/photon_device_core",
+  "textures": {
+    "accent": "quantumchanneling:block/photon_accent_red"
+  }
+}

@@ -1,10 +1,17 @@
 {
-  "variants": {
-    "facing=up":    { "model": "quantumchanneling:block/photon_emitter" },
-    "facing=down":  { "model": "quantumchanneling:block/photon_emitter", "x": 180 },
-    "facing=north": { "model": "quantumchanneling:block/photon_emitter", "x": 90 },
-    "facing=south": { "model": "quantumchanneling:block/photon_emitter", "x": 90, "y": 180 },
-    "facing=east":  { "model": "quantumchanneling:block/photon_emitter", "x": 90, "y": 90 },
-    "facing=west":  { "model": "quantumchanneling:block/photon_emitter", "x": 90, "y": 270 }
-  }
+  "multipart": [
+    { "when": {"facing": "up"},    "apply": {"model": "quantumchanneling:block/photon_emitter_core"} },
+    { "when": {"facing": "down"},  "apply": {"model": "quantumchanneling:block/photon_emitter_core", "x": 180} },
+    { "when": {"facing": "north"}, "apply": {"model": "quantumchanneling:block/photon_emitter_core", "x": 90} },
+    { "when": {"facing": "south"}, "apply": {"model": "quantumchanneling:block/photon_emitter_core", "x": 90, "y": 180} },
+    { "when": {"facing": "east"},  "apply": {"model": "quantumchanneling:block/photon_emitter_core", "x": 90, "y": 90} },
+    { "when": {"facing": "west"},  "apply": {"model": "quantumchanneling:block/photon_emitter_core", "x": 90, "y": 270} },
+
+    { "when": {"conn_up": "true"},    "apply": {"model": "quantumchanneling:block/photon_arm"} },
+    { "when": {"conn_down": "true"},  "apply": {"model": "quantumchanneling:block/photon_arm", "x": 180} },
+    { "when": {"conn_north": "true"}, "apply": {"model": "quantumchanneling:block/photon_arm", "x": 90} },
+    { "when": {"conn_south": "true"}, "apply": {"model": "quantumchanneling:block/photon_arm", "x": 90, "y": 180} },
+    { "when": {"conn_east": "true"},  "apply": {"model": "quantumchanneling:block/photon_arm", "x": 90, "y": 90} },
+    { "when": {"conn_west": "true"},  "apply": {"model": "quantumchanneling:block/photon_arm", "x": 90, "y": 270} }
+  ]
 }

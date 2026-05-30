@@ -1,3 +1,1 @@
-{
-  "parent": "quantumchanneling:block/photon_emitter"
-}
+{ "parent": "quantumchanneling:block/photon_emitter_core" }
