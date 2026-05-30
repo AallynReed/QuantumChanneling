@@ -91,31 +91,48 @@ public final class ModMessages {
                 .encoder(SetChannelChargeBlockedPacket::encode).decoder(SetChannelChargeBlockedPacket::decode)
                 .consumerMainThread(SetChannelChargeBlockedPacket::handle).add();
 
-        // ---- items mode ----
+        // ---- items mode v2: dynamic subchannels + per-emitter void + per-device subscriptions ----
         CHANNEL.messageBuilder(SetItemEnabledPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
                 .encoder(SetItemEnabledPacket::encode).decoder(SetItemEnabledPacket::decode)
                 .consumerMainThread(SetItemEnabledPacket::handle).add();
         CHANNEL.messageBuilder(SetItemBatchSizePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
                 .encoder(SetItemBatchSizePacket::encode).decoder(SetItemBatchSizePacket::decode)
                 .consumerMainThread(SetItemBatchSizePacket::handle).add();
-        CHANNEL.messageBuilder(SetItemFilterModePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
-                .encoder(SetItemFilterModePacket::encode).decoder(SetItemFilterModePacket::decode)
-                .consumerMainThread(SetItemFilterModePacket::handle).add();
-        CHANNEL.messageBuilder(AddItemFilterEntryPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
-                .encoder(AddItemFilterEntryPacket::encode).decoder(AddItemFilterEntryPacket::decode)
-                .consumerMainThread(AddItemFilterEntryPacket::handle).add();
-        CHANNEL.messageBuilder(RemoveItemFilterEntryPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
-                .encoder(RemoveItemFilterEntryPacket::encode).decoder(RemoveItemFilterEntryPacket::decode)
-                .consumerMainThread(RemoveItemFilterEntryPacket::handle).add();
-        CHANNEL.messageBuilder(SetSubchannelNamePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
-                .encoder(SetSubchannelNamePacket::encode).decoder(SetSubchannelNamePacket::decode)
-                .consumerMainThread(SetSubchannelNamePacket::handle).add();
-        CHANNEL.messageBuilder(SetDeviceResourceModePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
-                .encoder(SetDeviceResourceModePacket::encode).decoder(SetDeviceResourceModePacket::decode)
-                .consumerMainThread(SetDeviceResourceModePacket::handle).add();
-        CHANNEL.messageBuilder(SetDeviceSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
-                .encoder(SetDeviceSubchannelPacket::encode).decoder(SetDeviceSubchannelPacket::decode)
-                .consumerMainThread(SetDeviceSubchannelPacket::handle).add();
+        // Channel-level subchannel CRUD
+        CHANNEL.messageBuilder(CreateSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(CreateSubchannelPacket::encode).decoder(CreateSubchannelPacket::decode)
+                .consumerMainThread(CreateSubchannelPacket::handle).add();
+        CHANNEL.messageBuilder(DeleteSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(DeleteSubchannelPacket::encode).decoder(DeleteSubchannelPacket::decode)
+                .consumerMainThread(DeleteSubchannelPacket::handle).add();
+        CHANNEL.messageBuilder(RenameSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RenameSubchannelPacket::encode).decoder(RenameSubchannelPacket::decode)
+                .consumerMainThread(RenameSubchannelPacket::handle).add();
+        // Per-subchannel filter edits
+        CHANNEL.messageBuilder(SetSubchannelFilterModePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetSubchannelFilterModePacket::encode).decoder(SetSubchannelFilterModePacket::decode)
+                .consumerMainThread(SetSubchannelFilterModePacket::handle).add();
+        CHANNEL.messageBuilder(AddSubchannelItemPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddSubchannelItemPacket::encode).decoder(AddSubchannelItemPacket::decode)
+                .consumerMainThread(AddSubchannelItemPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveSubchannelItemPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveSubchannelItemPacket::encode).decoder(RemoveSubchannelItemPacket::decode)
+                .consumerMainThread(RemoveSubchannelItemPacket::handle).add();
+        // Per-emitter void filter edits. No WL/BL toggle packet — void is hard-locked to
+        // "items in the list are voided" semantics.
+        CHANNEL.messageBuilder(AddEmitterVoidItemPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddEmitterVoidItemPacket::encode).decoder(AddEmitterVoidItemPacket::decode)
+                .consumerMainThread(AddEmitterVoidItemPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveEmitterVoidItemPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveEmitterVoidItemPacket::encode).decoder(RemoveEmitterVoidItemPacket::decode)
+                .consumerMainThread(RemoveEmitterVoidItemPacket::handle).add();
+        // Per-device subscription mgmt
+        CHANNEL.messageBuilder(SubscribeDevicePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SubscribeDevicePacket::encode).decoder(SubscribeDevicePacket::decode)
+                .consumerMainThread(SubscribeDevicePacket::handle).add();
+        CHANNEL.messageBuilder(MoveDeviceSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(MoveDeviceSubchannelPacket::encode).decoder(MoveDeviceSubchannelPacket::decode)
+                .consumerMainThread(MoveDeviceSubchannelPacket::handle).add();
     }
 
     public static void sendToServer(Object msg) { CHANNEL.sendToServer(msg); }

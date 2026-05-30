@@ -7,23 +7,23 @@ import net.minecraftforge.network.NetworkEvent;
 import java.util.UUID;
 import java.util.function.Supplier;
 
-/** Client → server: rename one of the 5 sub-channels. */
-public record SetSubchannelNamePacket(UUID channelId, int subIdx, String name) {
-    public static void encode(SetSubchannelNamePacket p, FriendlyByteBuf b) {
+/** Client → server: rename a subchannel. */
+public record RenameSubchannelPacket(UUID channelId, UUID subId, String name) {
+    public static void encode(RenameSubchannelPacket p, FriendlyByteBuf b) {
         b.writeUUID(p.channelId);
-        b.writeVarInt(p.subIdx);
+        b.writeUUID(p.subId);
         b.writeUtf(p.name, ItemSubchannel.NAME_MAX);
     }
-    public static SetSubchannelNamePacket decode(FriendlyByteBuf b) {
-        return new SetSubchannelNamePacket(b.readUUID(), b.readVarInt(), b.readUtf(ItemSubchannel.NAME_MAX));
+    public static RenameSubchannelPacket decode(FriendlyByteBuf b) {
+        return new RenameSubchannelPacket(b.readUUID(), b.readUUID(), b.readUtf(ItemSubchannel.NAME_MAX));
     }
-    public static void handle(SetSubchannelNamePacket p, Supplier<NetworkEvent.Context> sup) {
+    public static void handle(RenameSubchannelPacket p, Supplier<NetworkEvent.Context> sup) {
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
             ChannelData data = ChannelData.get(player.serverLevel().getServer());
-            if (data.setSubchannelName(p.channelId, player.getUUID(), p.subIdx, p.name)) {
+            if (data.renameSubchannel(p.channelId, player.getUUID(), p.subId, p.name)) {
                 CreateChannelPacket.sendListBackTo(player);
             }
         });

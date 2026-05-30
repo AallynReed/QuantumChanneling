@@ -8,12 +8,26 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.inventory.SimpleContainerData;
+import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.UUID;
 
 public class PhotonNodeMenu extends AbstractContainerMenu {
+    /**
+     * Geometry mirrors the screen's panel: content area is 240 px tall, the inventory dock sits
+     * directly below it. Slot positions are upper-left, relative to (leftPos, topPos).
+     */
+    public static final int CONTENT_H = 240;
+    /** Height of the player-inventory dock below the content area. */
+    public static final int INV_DOCK_H = 94;
+    /** X-offset of the 9-wide slot grid (centered in the 320-wide content panel). */
+    private static final int INV_X = 79;
+    /** Y of the top row of the main 3×9 inventory grid. */
+    private static final int INV_Y = CONTENT_H + 16;
+    /** Y of the hotbar row. */
+    private static final int HOTBAR_Y = CONTENT_H + 74;
     public static final int DATA_THROUGHPUT = 0;
     public static final int DATA_CHUNK_LOADED = 1;
     public static final int DATA_CHANNEL_BOUND = 2;
@@ -57,6 +71,24 @@ public class PhotonNodeMenu extends AbstractContainerMenu {
         this.deviceName = deviceName == null ? "" : deviceName;
         this.storageCapacity = storageCapacity;
         addDataSlots(data);
+        addPlayerInventorySlots(inv);
+    }
+
+    /**
+     * Standard 3×9 + hotbar inventory dock pinned below the 240-px content area. Slot indexes:
+     * 0–26 = main inventory rows (top→bottom, left→right), 27–35 = hotbar.
+     */
+    private void addPlayerInventorySlots(Inventory inv) {
+        // Main 3×9 grid.
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 9; col++) {
+                addSlot(new Slot(inv, col + row * 9 + 9, INV_X + col * 18, INV_Y + row * 18));
+            }
+        }
+        // Hotbar.
+        for (int col = 0; col < 9; col++) {
+            addSlot(new Slot(inv, col, INV_X + col * 18, HOTBAR_Y));
+        }
     }
 
     /** Client-side. */
@@ -115,6 +147,23 @@ public class PhotonNodeMenu extends AbstractContainerMenu {
 
     @Override
     public ItemStack quickMoveStack(Player player, int slotIndex) {
-        return ItemStack.EMPTY;
+        // No device-side slots exist (the QC GUI is config-only), so shift-click just shuffles
+        // items between main inventory (0–26) and the hotbar (27–35).
+        Slot slot = slots.get(slotIndex);
+        if (!slot.hasItem()) return ItemStack.EMPTY;
+        ItemStack stack = slot.getItem();
+        ItemStack copy = stack.copy();
+
+        if (slotIndex < 27) {
+            // From main → try hotbar.
+            if (!moveItemStackTo(stack, 27, 36, false)) return ItemStack.EMPTY;
+        } else {
+            // From hotbar → try main.
+            if (!moveItemStackTo(stack, 0, 27, false)) return ItemStack.EMPTY;
+        }
+
+        if (stack.isEmpty()) slot.set(ItemStack.EMPTY);
+        else slot.setChanged();
+        return copy;
     }
 }

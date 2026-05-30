@@ -1,20 +1,25 @@
 package com.quantumchanneling.client;
 
-import com.quantumchanneling.channel.AddItemFilterEntryPacket;
+import com.quantumchanneling.channel.AddEmitterVoidItemPacket;
+import com.quantumchanneling.channel.AddSubchannelItemPacket;
 import com.quantumchanneling.channel.ChannelInfo;
 import com.quantumchanneling.channel.ChargingSlots;
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import com.quantumchanneling.channel.CreateChannelPacket;
+import com.quantumchanneling.channel.CreateSubchannelPacket;
 import com.quantumchanneling.channel.DeleteChannelPacket;
+import com.quantumchanneling.channel.DeleteSubchannelPacket;
 import com.quantumchanneling.channel.ItemChannelConfig;
 import com.quantumchanneling.channel.ItemFilter;
 import com.quantumchanneling.channel.ItemSubchannel;
 import com.quantumchanneling.channel.JoinByPinPacket;
 import com.quantumchanneling.channel.ModMessages;
+import com.quantumchanneling.channel.MoveDeviceSubchannelPacket;
 import com.quantumchanneling.channel.OpenChannelsRequestPacket;
 import com.quantumchanneling.channel.Permission;
 import com.quantumchanneling.channel.RemoteUnbindDevicePacket;
-import com.quantumchanneling.channel.RemoveItemFilterEntryPacket;
+import com.quantumchanneling.channel.RemoveEmitterVoidItemPacket;
+import com.quantumchanneling.channel.RemoveSubchannelItemPacket;
 import com.quantumchanneling.channel.RenameChannelPacket;
 import com.quantumchanneling.channel.RenameDevicePacket;
 import com.quantumchanneling.channel.SetChannelArmorPriorityPacket;
@@ -27,16 +32,16 @@ import com.quantumchanneling.channel.SetChannelPublicPacket;
 import com.quantumchanneling.channel.SetChannelSlotPriorityPacket;
 import com.quantumchanneling.channel.SetDeviceChannelPacket;
 import com.quantumchanneling.channel.SetDevicePriorityPacket;
-import com.quantumchanneling.channel.SetDeviceResourceModePacket;
-import com.quantumchanneling.channel.SetDeviceSubchannelPacket;
 import com.quantumchanneling.channel.SetDeviceSurgePacket;
 import com.quantumchanneling.channel.SetDeviceThroughputPacket;
 import com.quantumchanneling.channel.SetItemEnabledPacket;
-import com.quantumchanneling.channel.SetItemFilterModePacket;
+import com.quantumchanneling.channel.SetSubchannelFilterModePacket;
 import com.quantumchanneling.channel.SubscribeChargingPacket;
+import com.quantumchanneling.channel.SubscribeDevicePacket;
 import com.quantumchanneling.channel.ToggleChunkLoadPacket;
 import com.quantumchanneling.channel.TransferChannelOwnerPacket;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.item.ItemStack;
 import com.quantumchanneling.menu.PhotonNodeMenu;
 import net.minecraft.ChatFormatting;
@@ -51,7 +56,9 @@ import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
@@ -171,11 +178,16 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
      */
     private @Nullable EditBox lastFocusedEditBox = null;
 
-    // ---- Items panel state ----
-    /** Active filter target on the Items panel. 0 = main, 1 = void, 2..6 = sub-channel 0..4. */
-    private int itemsTarget = 0;
-    /** "Add item id" text input shown on the Items panel. */
-    private @Nullable EditBox itemsFilterAddInput;
+    // ---- Items panel v2 state ----
+    /**
+     * Currently-edited target on the items panel. When {@code editingVoid == true} and the device
+     * is an emitter, we're editing the per-emitter void filter; otherwise this is the subchannel
+     * UUID (null = no subchannels yet, panel shows the empty-state).
+     */
+    private @Nullable UUID selectedSubchannelId;
+    private boolean editingVoid = false;
+    /** "New subchannel name" text input. */
+    private @Nullable EditBox itemsNewSubInput;
 
     /** When true, the channel-info side panel (anchored to the left edge) is showing. */
     private boolean channelInfoOpen = false;
@@ -190,9 +202,19 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     public PhotonNodeScreen(PhotonNodeMenu menu, Inventory inv, Component title) {
         super(menu, inv, title);
         this.imageWidth = BG_W;
-        this.imageHeight = BG_H;
-        this.inventoryLabelY = imageHeight;
+        // The 240-px content panel + 94-px player-inventory dock. AbstractContainerScreen renders
+        // the dock's slot items automatically because the menu added 36 Slot entries; we draw the
+        // dock background + slot squares in renderBg below.
+        this.imageHeight = BG_H + PhotonNodeMenu.INV_DOCK_H;
+        // "Inventory" label inside the dock — same horizontal alignment as the slot grid.
+        this.inventoryLabelX = INV_DOCK_X;
+        this.inventoryLabelY = BG_H + 4;
+        // Hide the screen title text drawn by super — we paint the device name ourselves in renderLabels.
+        this.titleLabelY = 5;
     }
+
+    /** X-offset of the inventory dock slot grid (centered in BG_W). */
+    private static final int INV_DOCK_X = 79;
 
     @Override
     protected void init() {
@@ -245,17 +267,30 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     /* -------- builders -------- */
 
     private void buildTabContent() {
-        // Items mode owns the whole tab area regardless of the selected left-tab.
-        if (activeMode == ResourceMode.ITEMS) { buildItemsPanel(); return; }
+        // Every tab is usable in every side-mode now. The CHARGE slot is the only one that swaps
+        // content by mode — it becomes the items "Filters" panel when activeMode == ITEMS, and
+        // shows a coming-soon placeholder for FLUIDS/GASES.
         switch (activeTab) {
             case STATUS -> buildStatusTab();
             case TUNE   -> buildTuneTab();
-            case CHARGE -> buildChargeTab();
+            case CHARGE -> buildChargeOrFiltersTab();
             case NODES  -> buildNodesTab();
             case STATS  -> {}
             case ACCESS -> buildAccessTab();
             case SETUP  -> buildSetupTab();
             case FORGE  -> buildForgeTab();
+        }
+    }
+
+    /**
+     * Dispatches the CHARGE tab slot by active side-mode: energy → charging UI, items → filters
+     * (void + subchannels) UI, fluids/gases → no widgets (coming-soon overlay handles the visual).
+     */
+    private void buildChargeOrFiltersTab() {
+        switch (activeMode) {
+            case ENERGY -> buildChargeTab();
+            case ITEMS  -> buildItemsPanel();
+            case FLUIDS, GASES -> { /* no widgets — renderChargeOrFilters draws a coming-soon panel */ }
         }
     }
 
@@ -578,7 +613,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         renderActiveTabContent(gfx, mouseX, mouseY);
         renderSideTabs(gfx, mouseX, mouseY);
         renderChannelInfoSidebar(gfx, mouseX, mouseY);
-        renderComingSoonOverlay(gfx);
+        // The old full-screen coming-soon blocker is gone: when activeMode is FLUIDS/GASES, only
+        // the Charge/Filters tab content is replaced (see renderFiltersComingSoon). All other tabs
+        // (Status, Tune, Nodes, Stats, Access, Setup, Forge) remain interactive.
         renderConfirmModal(gfx, mouseX, mouseY);
         renderTooltip(gfx, mouseX, mouseY);
     }
@@ -607,6 +644,54 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         // Subtle vertical accent strips on the side edges (1 px).
         gfx.fill(leftPos, topPos + CONTENT_TOP, leftPos + 1, topPos + BG_H, accentDim);
         gfx.fill(leftPos + BG_W - 1, topPos + CONTENT_TOP, leftPos + BG_W, topPos + BG_H, accentDim);
+
+        renderInventoryDock(gfx, accent, accentDim);
+    }
+
+    /**
+     * Paints the player-inventory dock below the content area: an accent-bordered panel, the
+     * "Inventory" label region, and 36 slot squares (3×9 main + 9 hotbar) that match the slot
+     * positions added in {@link PhotonNodeMenu#addPlayerInventorySlots}. The vanilla container
+     * screen renders the item stacks on top of these squares automatically.
+     */
+    private void renderInventoryDock(GuiGraphics gfx, int accent, int accentDim) {
+        int dockTop = topPos + BG_H;
+        int dockBot = topPos + imageHeight;
+        // Outer accent border for the dock (2 px) matching the main panel.
+        gfx.fill(leftPos - 2, dockTop, leftPos + BG_W + 2, dockBot + 2, accentDim);
+        // Dock panel body — slightly lighter than content to read as a separate region.
+        gfx.fill(leftPos, dockTop, leftPos + BG_W, dockBot, 0xFF0E121A);
+        // Top accent stripe to separate dock from content.
+        gfx.fill(leftPos, dockTop, leftPos + BG_W, dockTop + 1, accent);
+        // Side edge strips.
+        gfx.fill(leftPos, dockTop, leftPos + 1, dockBot, accentDim);
+        gfx.fill(leftPos + BG_W - 1, dockTop, leftPos + BG_W, dockBot, accentDim);
+        // Bottom accent stripe.
+        gfx.fill(leftPos, dockBot - 1, leftPos + BG_W, dockBot, accent);
+
+        // 36 slot squares — 16×16 dark inset inside an 18×18 cell, matching vanilla container UX.
+        int slotInner = 0xFF1A1F2A;
+        int slotShadow = 0xFF06080C;
+        // Main 3×9.
+        for (int row = 0; row < 3; row++) {
+            for (int col = 0; col < 9; col++) {
+                int sx = leftPos + INV_DOCK_X + col * 18;
+                int sy = topPos + BG_H + 16 + row * 18;
+                paintSlot(gfx, sx, sy, slotInner, slotShadow);
+            }
+        }
+        // Hotbar.
+        for (int col = 0; col < 9; col++) {
+            int sx = leftPos + INV_DOCK_X + col * 18;
+            int sy = topPos + BG_H + 74;
+            paintSlot(gfx, sx, sy, slotInner, slotShadow);
+        }
+    }
+
+    /** Single 18×18 slot cell: dark base, 16×16 inset, faint hi-light/shadow for depth. */
+    private static void paintSlot(GuiGraphics gfx, int x, int y, int inner, int shadow) {
+        gfx.fill(x - 1, y - 1, x + 17, y + 17, shadow);
+        gfx.fill(x, y, x + 16, y + 16, inner);
     }
 
     /**
@@ -624,6 +709,18 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             idx++;
         }
         return String.format("%.2f%s", v, suffixes[idx - 1]);
+    }
+
+    /**
+     * Display label for a top-bar tab. The CHARGE slot swaps to "Filters" in non-energy modes
+     * because its content swaps too — energy = wireless charging UI, items/fluids/gases = filter
+     * configuration. Every other tab is mode-agnostic and uses its static labelKey.
+     */
+    private Component topTabLabel(Tab t) {
+        if (t == Tab.CHARGE && activeMode != ResourceMode.ENERGY) {
+            return Component.translatable("gui.quantumchanneling.tab.filters");
+        }
+        return Component.translatable(t.labelKey);
     }
 
     /** Linear interpolation between two ARGB colors. {@code t} = 0 returns a, 1 returns b. */
@@ -657,6 +754,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             int textW = font.width(msg);
             gfx.drawString(font, msg, BG_W - 8 - textW, 5, 0xFF888888, false);
         }
+
+        // "Inventory" label inside the dock — coords are relative to (leftPos, topPos).
+        gfx.drawString(font, playerInventoryTitle, INV_DOCK_X, BG_H + 4, 0xFFC0C8D0, false);
     }
 
     private void renderTabBar(GuiGraphics gfx, int mouseX, int mouseY) {
@@ -674,7 +774,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                 int accent = currentChannel != null ? currentChannel.color() : 0xFF50DCF0;
                 gfx.fill(x, y + TAB_BAR_H - 3, x + tabW - 1, y + TAB_BAR_H - 1, accent);
             }
-            Component label = Component.translatable(tabs[i].labelKey);
+            Component label = topTabLabel(tabs[i]);
             int labelW = font.width(label);
             gfx.drawString(font, label, x + (tabW - labelW) / 2, y + 5,
                     active ? 0xFFFFFFFF : 0xFFC0C8D0, false);
@@ -725,8 +825,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         int my = modalY();
         int accent = accentColor();
 
-        // Dim the rest of the panel
-        gfx.fill(leftPos, topPos, leftPos + BG_W, topPos + BG_H, 0xC0000000);
+        // Dim the rest of the panel (content area + inventory dock).
+        gfx.fill(leftPos, topPos, leftPos + BG_W, topPos + imageHeight, 0xC0000000);
         // Modal frame
         gfx.fill(mx - 2, my - 2, mx + MODAL_W + 2, my + MODAL_H + 2, accent);
         gfx.fill(mx, my, mx + MODAL_W, my + MODAL_H, 0xFF0B0E14);
@@ -792,34 +892,6 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return true;
     }
 
-    private void renderComingSoonOverlay(GuiGraphics gfx) {
-        // ENERGY uses the full tab system; ITEMS has its own end-to-end implementation in
-        // renderItemsPanel — only FLUIDS / GASES still show the "Coming soon" splash.
-        if (activeMode == ResourceMode.ENERGY || activeMode == ResourceMode.ITEMS) return;
-        int x1 = leftPos + 6;
-        int y1 = topPos + CONTENT_TOP + 2;
-        int x2 = leftPos + BG_W - 6;
-        int y2 = topPos + BG_H - 6;
-        // Semi-opaque blocker covering the content + tab content area.
-        gfx.fill(x1, y1, x2, y2, 0xE6000000);
-        // Accent frame in the mode's color.
-        gfx.fill(x1, y1, x2, y1 + 1, activeMode.color);
-        gfx.fill(x1, y2 - 1, x2, y2, activeMode.color);
-        gfx.fill(x1, y1, x1 + 1, y2, activeMode.color);
-        gfx.fill(x2 - 1, y1, x2, y2, activeMode.color);
-        // Headline + body.
-        Component title = Component.translatable(activeMode.labelKey)
-                .append(" — ")
-                .append(Component.translatable("gui.quantumchanneling.resource.coming_soon_title"));
-        int titleW = font.width(title);
-        gfx.drawString(font, title, leftPos + (BG_W - titleW) / 2, topPos + BG_H / 2 - 12,
-                activeMode.color, false);
-        Component body = Component.translatable("gui.quantumchanneling.resource.coming_soon_body");
-        int bodyW = font.width(body);
-        gfx.drawString(font, body, leftPos + (BG_W - bodyW) / 2, topPos + BG_H / 2 + 2,
-                0xFFD0D0D0, false);
-    }
-
     /** Returns true if the click hit a side tab (and was consumed). */
     private boolean handleSideTabClick(double mx, double my) {
         ResourceMode[] modes = ResourceMode.values();
@@ -838,10 +910,14 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return false;
     }
 
-    /** True when the overlay should swallow content clicks (non-ENERGY mode is active). */
+    /**
+     * True when a coming-soon splash currently covers the content area and should swallow any
+     * click that lands inside it. Only happens when the user is looking at the Charge/Filters
+     * tab in a side-mode that isn't implemented yet (fluids / gases).
+     */
     private boolean overlayBlocking() {
-        // ITEMS has its own interactive panel — only FLUIDS / GASES still eat clicks.
-        return activeMode != ResourceMode.ENERGY && activeMode != ResourceMode.ITEMS;
+        return activeTab == Tab.CHARGE
+                && (activeMode == ResourceMode.FLUIDS || activeMode == ResourceMode.GASES);
     }
 
     /* -------- Channel info side panel (left edge tab) -------- */
@@ -944,8 +1020,38 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         cy = drawChInfoFormatted(gfx, contentX, cy,
                 "gui.quantumchanneling.stats.total_output", totalOut, totalOut * 20);
 
-        // Charging slots — header + one bullet per enabled group. Reads at a glance and lines up
-        // visually with the Charge Activity and Players sections below.
+        // Mode-relevant subsections: energy → charging slots + players + charge activity;
+        // items → items config + subchannel list with subscriber counts; fluids/gases → placeholder.
+        cy = switch (activeMode) {
+            case ENERGY -> renderEnergyInfoSections(gfx, contentX, cy);
+            case ITEMS  -> renderItemsInfoSections(gfx, contentX, cy);
+            case FLUIDS, GASES -> renderComingSoonInfoSection(gfx, contentX, cy);
+        };
+
+        gfx.disableScissor();
+        // Cache the total content height so wheel-scrolling can clamp. Also re-clamp the current
+        // scroll value here so the next frame starts inside the valid range.
+        int totalContentH = (cy + channelInfoScroll) - contentTop + 4;
+        int viewH = contentBottom - contentTop;
+        channelInfoContentHeight = totalContentH;
+        int maxScroll = Math.max(0, totalContentH - viewH);
+        if (channelInfoScroll > maxScroll) channelInfoScroll = maxScroll;
+        if (channelInfoScroll < 0) channelInfoScroll = 0;
+        if (totalContentH > viewH) {
+            // Scrollbar on the right edge.
+            int trackX = x + w - 4;
+            gfx.fill(trackX, contentTop, trackX + 2, contentBottom, 0xFF202632);
+            int thumbH = Math.max(8, viewH * viewH / totalContentH);
+            int thumbY = contentTop + (viewH - thumbH) * channelInfoScroll / Math.max(1, maxScroll);
+            gfx.fill(trackX, thumbY, trackX + 2, thumbY + thumbH, accent);
+        }
+    }
+
+    /**
+     * Energy-mode subsections of the channel-info sidebar: charging-slot bullet list, the players
+     * table, and the live charge-activity tree. Returns the next y-cursor.
+     */
+    private int renderEnergyInfoSections(GuiGraphics gfx, int contentX, int cy) {
         cy += 4;
         gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.charging_header")
                 .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
@@ -968,7 +1074,6 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                 cy = drawChInfoBullet(gfx, contentX + 4, cy, "gui.quantumchanneling.charge.baubles");
         }
 
-        // Players header + list.
         cy += 4;
         gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.players_header")
                 .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
@@ -983,8 +1088,6 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             cy += 11;
         }
 
-        // Charge Activity — only players who actually drew FE last tick, tree-style with the
-        // specific slots that absorbed energy and their FE/t rate.
         cy += 4;
         gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.charge_header")
                 .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
@@ -1010,24 +1113,83 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                 cy += 2;
             }
         }
+        return cy;
+    }
 
-        gfx.disableScissor();
-        // Cache the total content height so wheel-scrolling can clamp. Also re-clamp the current
-        // scroll value here so the next frame starts inside the valid range.
-        int totalContentH = (cy + channelInfoScroll) - contentTop + 4;
-        int viewH = contentBottom - contentTop;
-        channelInfoContentHeight = totalContentH;
-        int maxScroll = Math.max(0, totalContentH - viewH);
-        if (channelInfoScroll > maxScroll) channelInfoScroll = maxScroll;
-        if (channelInfoScroll < 0) channelInfoScroll = 0;
-        if (totalContentH > viewH) {
-            // Scrollbar on the right edge.
-            int trackX = x + w - 4;
-            gfx.fill(trackX, contentTop, trackX + 2, contentBottom, 0xFF202632);
-            int thumbH = Math.max(8, viewH * viewH / totalContentH);
-            int thumbY = contentTop + (viewH - thumbH) * channelInfoScroll / Math.max(1, maxScroll);
-            gfx.fill(trackX, thumbY, trackX + 2, thumbY + thumbH, accent);
+    /**
+     * Items-mode subsections of the channel-info sidebar: enable state, subchannel list with
+     * filter mode + entry counts + emitter/receiver subscriber tallies, and this device's void
+     * filter summary when it's an emitter. Returns the next y-cursor.
+     */
+    private int renderItemsInfoSections(GuiGraphics gfx, int contentX, int cy) {
+        ItemChannelConfig cfg = currentChannel.itemConfig();
+        cy += 4;
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.items_header")
+                .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
+        cy += 12;
+        String state = cfg.isEnabled() ? "§aON" : "§7OFF";
+        cy = drawChInfoFormatted(gfx, contentX + 4, cy,
+                "gui.quantumchanneling.channel.info.items_state_fmt", state);
+
+        cy += 4;
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.subchannels_header")
+                .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
+        cy += 12;
+        if (cfg.subchannelCount() == 0) {
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.no_subchannels")
+                    .withStyle(ChatFormatting.GRAY), contentX + 4, cy, 0xFF888888, false);
+            cy += 11;
+        } else {
+            // One-time tally of how many emitters / receivers subscribe to each subchannel.
+            Map<UUID, int[]> tally = new HashMap<>();   // [emitters, receivers]
+            for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+                boolean isEm = m.type() == ChannelInfo.TYPE_EMITTER;
+                boolean isRc = m.type() == ChannelInfo.TYPE_RECEIVER;
+                if (!isEm && !isRc) continue;
+                for (UUID sid : m.subscribedSubchannels()) {
+                    int[] t = tally.computeIfAbsent(sid, k -> new int[2]);
+                    if (isEm) t[0]++; else t[1]++;
+                }
+            }
+            for (ItemSubchannel sub : cfg.subchannels()) {
+                int[] t = tally.getOrDefault(sub.id(), new int[]{0, 0});
+                String mode = sub.filter().isWhitelist() ? "§aWL" : "§cBL";
+                gfx.drawString(font, Component.literal("• " + sub.name()),
+                        contentX + 4, cy, 0xFFFFFFFF, false);
+                cy += 10;
+                gfx.drawString(font, Component.translatable(
+                                "gui.quantumchanneling.channel.info.sub_detail_fmt",
+                                mode, sub.filter().size(), t[0], t[1]),
+                        contentX + 14, cy, 0xFFB0B8C0, false);
+                cy += 11;
+            }
         }
+
+        // Per-emitter void filter — only relevant when this device is itself an emitter.
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) {
+            cy += 4;
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.void_header")
+                    .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
+            cy += 12;
+            // Void is single-mode (items in list → voided), so no WL/BL prefix — just the count.
+            ItemFilter vf = here.voidFilter();
+            cy = drawChInfoFormatted(gfx, contentX + 4, cy,
+                    "gui.quantumchanneling.channel.info.void_detail_fmt", vf.size());
+        }
+        return cy;
+    }
+
+    /** Fluids / gases placeholder — keep the panel feeling consistent across modes. */
+    private int renderComingSoonInfoSection(GuiGraphics gfx, int contentX, int cy) {
+        cy += 4;
+        gfx.drawString(font, Component.translatable(activeMode.labelKey)
+                        .copy().append(" — ")
+                        .append(Component.translatable("gui.quantumchanneling.resource.coming_soon_title"))
+                        .withStyle(ChatFormatting.GRAY),
+                contentX, cy, 0xFF888888, false);
+        cy += 11;
+        return cy;
     }
 
     /**
@@ -1073,17 +1235,47 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     }
 
     private void renderActiveTabContent(GuiGraphics gfx, int mouseX, int mouseY) {
-        if (activeMode == ResourceMode.ITEMS) { renderItemsPanel(gfx, mouseX, mouseY); return; }
         switch (activeTab) {
             case STATUS -> renderStatus(gfx);
             case TUNE   -> renderTune(gfx, mouseX, mouseY);
-            case CHARGE -> renderCharge(gfx);
+            case CHARGE -> renderChargeOrFilters(gfx, mouseX, mouseY);
             case NODES  -> renderNodes(gfx, mouseX, mouseY);
             case STATS  -> renderStats(gfx);
             case ACCESS -> renderAccess(gfx, mouseX, mouseY);
             case SETUP  -> renderSetup(gfx);
             case FORGE  -> renderForge(gfx);
         }
+    }
+
+    private void renderChargeOrFilters(GuiGraphics gfx, int mouseX, int mouseY) {
+        switch (activeMode) {
+            case ENERGY -> renderCharge(gfx);
+            case ITEMS  -> renderItemsPanel(gfx, mouseX, mouseY);
+            case FLUIDS, GASES -> renderFiltersComingSoon(gfx);
+        }
+    }
+
+    /** Coming-soon splash drawn INSIDE the Charge/Filters tab content area for fluids/gases. */
+    private void renderFiltersComingSoon(GuiGraphics gfx) {
+        int x1 = leftPos + 6;
+        int y1 = topPos + CONTENT_TOP + 2;
+        int x2 = leftPos + BG_W - 6;
+        int y2 = topPos + BG_H - 6;
+        gfx.fill(x1, y1, x2, y2, 0xE6000000);
+        gfx.fill(x1, y1, x2, y1 + 1, activeMode.color);
+        gfx.fill(x1, y2 - 1, x2, y2, activeMode.color);
+        gfx.fill(x1, y1, x1 + 1, y2, activeMode.color);
+        gfx.fill(x2 - 1, y1, x2, y2, activeMode.color);
+        Component title = Component.translatable(activeMode.labelKey)
+                .append(" — ")
+                .append(Component.translatable("gui.quantumchanneling.resource.coming_soon_title"));
+        int titleW = font.width(title);
+        gfx.drawString(font, title, leftPos + (BG_W - titleW) / 2, topPos + BG_H / 2 - 12,
+                activeMode.color, false);
+        Component body = Component.translatable("gui.quantumchanneling.resource.coming_soon_body");
+        int bodyW = font.width(body);
+        gfx.drawString(font, body, leftPos + (BG_W - bodyW) / 2, topPos + BG_H / 2 + 2,
+                0xFFC0C0C0, false);
     }
 
     private void renderStatus(GuiGraphics gfx) {
@@ -2047,11 +2239,14 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                 && my >= topPos + CONTENT_TOP + 2 && my < topPos + BG_H - 6) {
             return true;
         }
-        // Items panel has its own click logic — try it before tab routing.
-        if (handleItemsPanelClick(mx, my)) {
-            super.mouseClicked(mx, my, button);    // let widgets (EditBox / PhotonButton) still fire
-            return true;
-        }
+        // Items panel has its own click logic — try it before tab routing. Do NOT fall through
+        // to super.mouseClicked here: AbstractContainerScreen treats clicks-with-carried-stack
+        // inside the GUI rect but outside any real Slot as "drop carried on the ground". The
+        // filter-slot grid sits exactly in that no-real-Slot region, so we must terminate the
+        // click here to preserve the cursor stack for the user-facing pick-up→show-filter→put-back
+        // workflow. No PhotonButton or EditBox shares the filter-slot region, so widgets won't miss
+        // input by skipping super.
+        if (handleItemsPanelClick(mx, my)) return true;
         Tab[] tabs = Tab.values();
         int tabW = (BG_W - 8) / tabs.length;
         int tabBarTop = topPos + TAB_BAR_Y + 1;
@@ -2260,32 +2455,25 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return super.mouseScrolled(mx, my, delta);
     }
 
-    /* ===================== Items panel ===================== */
-
-    private static final int ITEMS_TARGET_COUNT = 7;        // 0=Main, 1=Void, 2..6=Sub 0..4
-
-    /* ---- Inventory-style slot grid ---- */
+    /* ===================== Items panel v2 (dynamic subchannels) ===================== */
 
     public static final int ITEMS_SLOT_COLS = 9;
     public static final int ITEMS_SLOT_ROWS = 3;
     public static final int ITEMS_SLOT_SIZE = 18;
-    public static final int ITEMS_SLOTS_VISIBLE = ITEMS_SLOT_COLS * ITEMS_SLOT_ROWS;   // 27
+    public static final int ITEMS_SLOTS_VISIBLE = ITEMS_SLOT_COLS * ITEMS_SLOT_ROWS;
 
-    /** Used by the JEI / EMI ghost-ingredient handlers to gate registration on items-mode being open. */
     public boolean isItemsModeActive() {
-        return activeMode == ResourceMode.ITEMS && currentChannel != null;
+        // Filter slots only exist when the user is actually looking at the Filters panel — the
+        // CHARGE tab slot in ITEMS side-mode. Other tabs (Tune, Status, Stats, etc.) are reachable
+        // from items mode now but don't host the slot grid, so JEI/EMI shouldn't see drop targets there.
+        return activeTab == Tab.CHARGE && activeMode == ResourceMode.ITEMS && currentChannel != null;
     }
 
-    /** Number of visible filter slots (the grid is always rendered at full size). */
     public int getItemsSlotCount() { return ITEMS_SLOTS_VISIBLE; }
 
-    /**
-     * Screen-space rectangle for slot {@code slotIdx} (0..26, row-major top-left to bottom-right).
-     * Returns null when items mode isn't open. Used by JEI per-slot ghost-targets and by EMI's
-     * point-hit-test fallback.
-     */
-    public @org.jetbrains.annotations.Nullable net.minecraft.client.renderer.Rect2i getItemsSlotRect(int slotIdx) {
+    public @Nullable net.minecraft.client.renderer.Rect2i getItemsSlotRect(int slotIdx) {
         if (!isItemsModeActive() || slotIdx < 0 || slotIdx >= ITEMS_SLOTS_VISIBLE) return null;
+        if (resolveCurrentFilter() == null) return null;
         int cx = leftPos + 8;
         int rw = BG_W - 16;
         int gridW = ITEMS_SLOT_COLS * ITEMS_SLOT_SIZE;
@@ -2299,7 +2487,6 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                 ITEMS_SLOT_SIZE, ITEMS_SLOT_SIZE);
     }
 
-    /** Returns the slot index at screen coords (x, y), or -1 when not over a slot. */
     public int getItemsSlotAt(int x, int y) {
         if (!isItemsModeActive()) return -1;
         for (int i = 0; i < ITEMS_SLOTS_VISIBLE; i++) {
@@ -2310,101 +2497,355 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return -1;
     }
 
-    /**
-     * Accepts a ghost-drop onto slot {@code slotIdx}. If the slot already holds a different item,
-     * the existing entry is removed first and the new one added (effectively a "swap"). If the
-     * slot is empty, the new entry is appended to the current target's filter.
-     */
-    public void acceptDroppedFilterItem(net.minecraft.resources.ResourceLocation id, int slotIdx) {
-        if (currentChannel == null || activeMode != ResourceMode.ITEMS || id == null) return;
-        ItemFilter f = resolveItemsTargetFilter();
+    public void acceptDroppedFilterItem(ResourceLocation id, int slotIdx) {
+        if (currentChannel == null || !isItemsModeActive() || id == null) return;
+        ItemFilter f = resolveCurrentFilter();
         if (f == null) return;
-        net.minecraft.resources.ResourceLocation existing = filterItemAtSlot(f, slotIdx);
-        if (existing != null && existing.equals(id)) return;   // dropping the same item — no-op
-        if (existing != null) {
-            ModMessages.sendToServer(new RemoveItemFilterEntryPacket(
-                    currentChannel.id(), itemsTarget, existing));
-        }
-        ModMessages.sendToServer(new AddItemFilterEntryPacket(currentChannel.id(), itemsTarget, id));
+        ResourceLocation existing = filterItemAtSlot(f, slotIdx);
+        if (existing != null && existing.equals(id)) return;
+        if (existing != null) sendRemoveItem(existing);
+        sendAddItem(id);
     }
 
-    /** Returns the ResourceLocation at slot {@code slotIdx} in iteration order, or null. */
-    private static @org.jetbrains.annotations.Nullable net.minecraft.resources.ResourceLocation
-            filterItemAtSlot(ItemFilter f, int slotIdx) {
-        if (f == null || slotIdx < 0) return null;
-        int i = 0;
-        for (var id : f.items()) {
-            if (i == slotIdx) return id;
-            i++;
+    public java.util.List<net.minecraft.client.renderer.Rect2i> getExtraGuiAreas() {
+        java.util.List<net.minecraft.client.renderer.Rect2i> areas = new java.util.ArrayList<>(3);
+        int rightTabsH = 4 * SIDE_TAB_H + 3 * SIDE_TAB_GAP;
+        areas.add(new net.minecraft.client.renderer.Rect2i(
+                leftPos + BG_W - 1, topPos + CONTENT_TOP - 1,
+                SIDE_TAB_W + 2, rightTabsH + 2));
+        areas.add(new net.minecraft.client.renderer.Rect2i(
+                leftPos - LEFT_TAB_W - 1, topPos + CONTENT_TOP - 1,
+                LEFT_TAB_W + 2, LEFT_TAB_H + 2));
+        if (channelInfoOpen) {
+            areas.add(new net.minecraft.client.renderer.Rect2i(
+                    leftPos - LEFT_TAB_W - CHANNEL_PANEL_W - 1, topPos + CONTENT_TOP - 1,
+                    CHANNEL_PANEL_W + 2, BG_H - CONTENT_TOP - 2));
         }
-        return null;
+        return areas;
     }
 
     private void buildItemsPanel() {
         int cx = leftPos + 8;
         int rw = BG_W - 16;
-        // "Add item" text input — typing fallback for users without JEI/EMI installed. Lives
-        // below the slot grid (which ends at CONTENT_TOP + 80 + 3*18 = +134).
-        int addY = topPos + CONTENT_TOP + 140;
-        itemsFilterAddInput = new EditBox(font, cx, addY, rw - 60, 16, Component.literal(""));
-        itemsFilterAddInput.setHint(Component.translatable("gui.quantumchanneling.items.add_hint"));
-        itemsFilterAddInput.setMaxLength(64);
-        addRenderableWidget(itemsFilterAddInput);
 
-        addRenderableWidget(PhotonButton.of(cx + rw - 56, addY - 1, 56, 18,
-                Component.translatable("gui.quantumchanneling.items.add_btn"),
-                b -> applyAddFilterEntry(), this::accentColor));
+        ensureSelectionValid();
+        ChannelInfo.MemberPos here = findThisDevice();
+        boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
 
-        // Per-channel master enable (top of panel).
         boolean enabled = currentChannel != null && currentChannel.itemConfig().isEnabled();
-        Component enableLabel = Component.translatable(enabled
-                ? "gui.quantumchanneling.items.enabled"
-                : "gui.quantumchanneling.items.disabled");
-        addRenderableWidget(PhotonButton.of(cx, topPos + CONTENT_TOP + 4, 110, 18, enableLabel,
+        addRenderableWidget(PhotonButton.of(cx, topPos + CONTENT_TOP + 4, 100, 18,
+                Component.translatable(enabled
+                        ? "gui.quantumchanneling.items.enabled"
+                        : "gui.quantumchanneling.items.disabled"),
+                b -> {
+                    if (currentChannel != null) ModMessages.sendToServer(
+                            new SetItemEnabledPacket(currentChannel.id(), !enabled));
+                }, this::accentColor));
+
+        // No per-device resource-mode toggle — all-in-one: every device handles every resource.
+
+        itemsNewSubInput = new EditBox(font, cx + 104, topPos + CONTENT_TOP + 5,
+                rw - 104 - 44, 16, Component.literal(""));
+        itemsNewSubInput.setHint(Component.translatable("gui.quantumchanneling.items.new_sub_hint"));
+        itemsNewSubInput.setMaxLength(32);
+        addRenderableWidget(itemsNewSubInput);
+        addRenderableWidget(PhotonButton.of(cx + rw - 40, topPos + CONTENT_TOP + 4, 40, 18,
+                Component.translatable("gui.quantumchanneling.items.new_sub_btn"),
                 b -> {
                     if (currentChannel == null) return;
-                    ModMessages.sendToServer(new SetItemEnabledPacket(currentChannel.id(),
-                            !currentChannel.itemConfig().isEnabled()));
+                    String name = itemsNewSubInput != null ? itemsNewSubInput.getValue().trim() : "";
+                    if (name.isEmpty()) {
+                        name = "Sub " + (currentChannel.itemConfig().subchannelCount() + 1);
+                    }
+                    ModMessages.sendToServer(new CreateSubchannelPacket(currentChannel.id(), name));
+                    if (itemsNewSubInput != null) itemsNewSubInput.setValue("");
                 }, this::accentColor));
 
-        // Per-device resource-mode toggle (this screen always represents one specific device).
-        ChannelInfo.MemberPos here = findThisDevice();
-        com.quantumchanneling.channel.ResourceMode deviceMode = here != null
-                ? here.resourceMode() : com.quantumchanneling.channel.ResourceMode.ENERGY;
-        Component modeLabel = Component.translatable(
-                deviceMode == com.quantumchanneling.channel.ResourceMode.ITEMS
-                        ? "gui.quantumchanneling.items.device_mode_items"
-                        : "gui.quantumchanneling.items.device_mode_energy");
-        addRenderableWidget(PhotonButton.of(cx + 116, topPos + CONTENT_TOP + 4, 96, 18, modeLabel,
-                b -> {
-                    com.quantumchanneling.channel.ResourceMode next =
-                            deviceMode == com.quantumchanneling.channel.ResourceMode.ITEMS
-                                    ? com.quantumchanneling.channel.ResourceMode.ENERGY
-                                    : com.quantumchanneling.channel.ResourceMode.ITEMS;
-                    ModMessages.sendToServer(new SetDeviceResourceModePacket(menu.getBlockPos(), next));
-                }, this::accentColor));
+        // Editable targets = void (for emitters only) + every subchannel. With zero targets the
+        // entire editor section collapses to a single empty-state message rendered later.
+        int subCount = currentChannel == null ? 0 : currentChannel.itemConfig().subchannelCount();
+        int cycleSize = subCount + (emitter ? 1 : 0);
+        boolean hasEditTarget = cycleSize > 0;
+        boolean showArrows = cycleSize > 1;
+        if (!hasEditTarget) return;   // renderItemsPanel paints the empty state
 
-        // Whitelist/Blacklist toggle for the current target — hidden for Void (target=1) since the
-        // void list is conceptually always "whitelist of items-to-discard".
-        if (currentChannel != null && itemsTarget != 1) {
-            ItemFilter f = resolveItemsTargetFilter();
-            boolean white = f != null && f.isWhitelist();
-            Component modeLbl = Component.translatable(white
-                    ? "gui.quantumchanneling.items.filter_whitelist"
-                    : "gui.quantumchanneling.items.filter_blacklist");
-            addRenderableWidget(PhotonButton.of(cx + rw - 100, topPos + CONTENT_TOP + 60, 100, 18,
-                    modeLbl,
-                    b -> {
-                        if (currentChannel == null) return;
-                        ItemFilter cur = resolveItemsTargetFilter();
-                        if (cur == null) return;
-                        ModMessages.sendToServer(new SetItemFilterModePacket(currentChannel.id(),
-                                itemsTarget, !cur.isWhitelist()));
-                    }, this::accentColor));
+        int selY = topPos + CONTENT_TOP + 28;
+        int labelX = showArrows ? cx + 16 : cx;
+        int labelW = showArrows ? 130 : 162;
+        if (showArrows) {
+            addRenderableWidget(PhotonButton.of(cx, selY, 14, 18, Component.literal("◀"),
+                    b -> cycleSelection(-1), this::accentColor));
+        }
+        addRenderableWidget(PhotonButton.of(labelX, selY, labelW, 18, currentEditingLabel(),
+                b -> cycleSelection(+1), this::accentColor));
+        if (showArrows) {
+            addRenderableWidget(PhotonButton.of(cx + 148, selY, 14, 18, Component.literal("▶"),
+                    b -> cycleSelection(+1), this::accentColor));
+        }
+
+        // Subchannel filters have a WL/BL toggle; the void filter is single-mode by design
+        // (items in list → voided) so it never shows the toggle.
+        ItemFilter cur = resolveCurrentFilter();
+        if (cur != null && !editingVoid) {
+            addRenderableWidget(PhotonButton.of(cx + 166, selY, 70, 18,
+                    Component.translatable(cur.isWhitelist()
+                            ? "gui.quantumchanneling.items.filter_whitelist"
+                            : "gui.quantumchanneling.items.filter_blacklist"),
+                    b -> sendToggleFilterMode(), this::accentColor));
+        }
+
+        if (selectedSubchannelId != null && !editingVoid && here != null) {
+            boolean subbed = here.subscribedSubchannels().contains(selectedSubchannelId);
+            UUID subId = selectedSubchannelId;
+            addRenderableWidget(PhotonButton.of(cx + 240, selY, 60, 18,
+                    Component.translatable(subbed
+                            ? "gui.quantumchanneling.items.unsubscribe"
+                            : "gui.quantumchanneling.items.subscribe"),
+                    b -> ModMessages.sendToServer(new SubscribeDevicePacket(
+                            menu.getBlockPos(), subId, !subbed)),
+                    this::accentColor));
+        }
+
+        // No "minecraft:item_id…" text input row — filter entries are populated exclusively by
+        // (a) picking up an inventory item and clicking a slot (cursor preserved), (b) JEI/EMI
+        // ghost-drag onto a slot, or (c) deleted by clicking a populated slot with an empty cursor.
+        if (selectedSubchannelId != null && !editingVoid && currentChannel != null) {
+            UUID subId = selectedSubchannelId;
+            // Delete-the-subchannel-from-the-channel button always available to the editor.
+            addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
+                    Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
+                    b -> ModMessages.sendToServer(new DeleteSubchannelPacket(currentChannel.id(), subId))));
+
+            // Priority reorder buttons — only meaningful when THIS emitter is subscribed to the
+            // currently-selected subchannel AND has at least one other subscription to swap with.
+            // The header is rendered in renderItemsPanel so it lines up after layout.
+            if (emitter && here != null) {
+                java.util.List<UUID> mySubs = here.subscribedSubchannels();
+                int myIdx = mySubs.indexOf(subId);
+                int total = mySubs.size();
+                boolean canReorder = myIdx >= 0 && total >= 2;
+                if (canReorder) {
+                    boolean canUp = myIdx > 0;
+                    boolean canDown = myIdx < total - 1;
+                    PhotonButton up = PhotonButton.of(cx, topPos + CONTENT_TOP + 160, 56, 18,
+                            Component.translatable("gui.quantumchanneling.items.priority_up"),
+                            b -> ModMessages.sendToServer(new MoveDeviceSubchannelPacket(menu.getBlockPos(), subId, -1)),
+                            this::accentColor);
+                    up.active = canUp;
+                    up.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                            Component.translatable("gui.quantumchanneling.items.priority_up.tip")));
+                    addRenderableWidget(up);
+
+                    PhotonButton down = PhotonButton.of(cx + 60, topPos + CONTENT_TOP + 160, 56, 18,
+                            Component.translatable("gui.quantumchanneling.items.priority_down"),
+                            b -> ModMessages.sendToServer(new MoveDeviceSubchannelPacket(menu.getBlockPos(), subId, +1)),
+                            this::accentColor);
+                    down.active = canDown;
+                    down.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                            Component.translatable("gui.quantumchanneling.items.priority_down.tip")));
+                    addRenderableWidget(down);
+                }
+            }
         }
     }
 
-    /** Returns the MemberPos describing the device this menu represents (or null if unbound). */
+    private void renderItemsPanel(GuiGraphics gfx, int mouseX, int mouseY) {
+        int cx = leftPos + 8;
+        int rw = BG_W - 16;
+        int accent = accentColor();
+
+        if (currentChannel == null) {
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.unbound")
+                    .withStyle(ChatFormatting.GRAY), cx, topPos + CONTENT_TOP + 4, 0xAAAAAA, false);
+            return;
+        }
+
+        // Nothing to edit yet (receiver on a channel with no subchannels). Paint a single,
+        // centered empty-state instead of three overlapping labels + dead cycle arrows.
+        ChannelInfo.MemberPos here = findThisDevice();
+        boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
+        int subCount = currentChannel.itemConfig().subchannelCount();
+        int cycleSize = subCount + (emitter ? 1 : 0);
+        if (cycleSize == 0) {
+            Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
+                    .withStyle(ChatFormatting.GRAY);
+            var lines = font.split(msg, rw - 16);
+            int y = topPos + CONTENT_TOP + 60;
+            for (var line : lines) {
+                int w = font.width(line);
+                gfx.drawString(font, line, leftPos + (BG_W - w) / 2, y, 0xFF888888, false);
+                y += 11;
+            }
+            return;
+        }
+
+        ItemFilter f = resolveCurrentFilter();
+        ItemStack hoveredStack = null;
+        if (f == null) {
+            // Defensive — shouldn't hit this when cycleSize>0, but if a race nullifies the filter
+            // mid-frame we still want a clean grey hint instead of nothing.
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.items.no_subs")
+                    .withStyle(ChatFormatting.GRAY),
+                    cx + 4, topPos + CONTENT_TOP + 90, 0xFF888888, false);
+        } else {
+            for (int i = 0; i < ITEMS_SLOTS_VISIBLE; i++) {
+                var r = getItemsSlotRect(i);
+                if (r == null) continue;
+                int sx = r.getX(), sy = r.getY();
+                ResourceLocation id = filterItemAtSlot(f, i);
+                ItemStack stack = ItemStack.EMPTY;
+                if (id != null) {
+                    var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(id);
+                    if (item != net.minecraft.world.item.Items.AIR) stack = new ItemStack(item);
+                }
+                boolean hover = mouseX >= sx && mouseX < sx + ITEMS_SLOT_SIZE
+                        && mouseY >= sy && mouseY < sy + ITEMS_SLOT_SIZE;
+                int border = hover ? accent : blendARGB(accent, 0xFF000000, 0.6f);
+                int inner  = hover ? 0xFF1A2030 : 0xFF0C1018;
+                gfx.fill(sx, sy, sx + ITEMS_SLOT_SIZE, sy + ITEMS_SLOT_SIZE, border);
+                gfx.fill(sx + 1, sy + 1, sx + ITEMS_SLOT_SIZE - 1, sy + ITEMS_SLOT_SIZE - 1, inner);
+                if (!stack.isEmpty()) {
+                    gfx.renderItem(stack, sx + 1, sy + 1);
+                    gfx.renderItemDecorations(font, stack, sx + 1, sy + 1);
+                    if (hover) hoveredStack = stack;
+                }
+            }
+            if (hoveredStack != null) gfx.renderTooltip(font, hoveredStack, mouseX, mouseY);
+            if (f.size() > ITEMS_SLOTS_VISIBLE) {
+                gfx.drawString(font, Component.literal("… +" + (f.size() - ITEMS_SLOTS_VISIBLE) + " more"),
+                        cx + 4, topPos + CONTENT_TOP + 80 + ITEMS_SLOT_ROWS * ITEMS_SLOT_SIZE + 2,
+                        0xFF808890, false);
+            }
+        }
+
+        // Priority row header — only when the reorder buttons are actually visible.
+        if (emitter && here != null && !editingVoid && selectedSubchannelId != null) {
+            java.util.List<UUID> mySubs = here.subscribedSubchannels();
+            int myIdx = mySubs.indexOf(selectedSubchannelId);
+            if (myIdx >= 0 && mySubs.size() >= 2) {
+                gfx.drawString(font,
+                        Component.translatable("gui.quantumchanneling.items.priority_header",
+                                myIdx + 1, mySubs.size())
+                                .withStyle(ChatFormatting.GRAY),
+                        cx, topPos + CONTENT_TOP + 148, 0xFFB0B8C8, false);
+            }
+        }
+
+        int n = currentChannel.itemConfig().subchannelCount();
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.items.sub_count", n),
+                cx, topPos + BG_H - 18, 0xFFB0B8C8, false);
+    }
+
+    private boolean handleItemsPanelClick(double mx, double my) {
+        if (!isItemsModeActive() || currentChannel == null) return false;
+        int slot = getItemsSlotAt((int) mx, (int) my);
+        if (slot >= 0) {
+            // Cursor-holds-stack path: capture the item id and add it to the filter without
+            // consuming the stack. Lets the user "show" filter slots an item from their inventory
+            // dock by picking it up and clicking, then dropping it back. The cursor stack is
+            // preserved because we never call menu.setCarried(EMPTY) and we return true so
+            // super.mouseClicked never sees a slot to deposit into.
+            ItemStack carried = menu.getCarried();
+            if (!carried.isEmpty()) {
+                ResourceLocation id = BuiltInRegistries.ITEM.getKey(carried.getItem());
+                if (id != null) sendAddItem(id);
+                return true;
+            }
+            // Empty cursor on a populated slot → remove the entry (existing behavior).
+            ItemFilter f = resolveCurrentFilter();
+            ResourceLocation id = filterItemAtSlot(f, slot);
+            if (id != null) sendRemoveItem(id);
+            return true;
+        }
+        return false;
+    }
+
+    private void ensureSelectionValid() {
+        if (currentChannel == null) {
+            selectedSubchannelId = null;
+            editingVoid = false;
+            return;
+        }
+        if (editingVoid) {
+            if (!isCurrentEmitter()) {
+                editingVoid = false;
+                selectedSubchannelId = firstSubchannelId();
+            }
+            return;
+        }
+        if (selectedSubchannelId != null
+                && currentChannel.itemConfig().subchannel(selectedSubchannelId) != null) return;
+        UUID first = firstSubchannelId();
+        if (first != null) {
+            selectedSubchannelId = first;
+            editingVoid = false;
+        } else if (isCurrentEmitter()) {
+            editingVoid = true;
+            selectedSubchannelId = null;
+        } else {
+            selectedSubchannelId = null;
+            editingVoid = false;
+        }
+    }
+
+    private @Nullable UUID firstSubchannelId() {
+        if (currentChannel == null) return null;
+        for (var s : currentChannel.itemConfig().subchannels()) return s.id();
+        return null;
+    }
+
+    private @Nullable ItemFilter resolveCurrentFilter() {
+        if (currentChannel == null) return null;
+        if (editingVoid) {
+            ChannelInfo.MemberPos here = findThisDevice();
+            if (here == null || here.type() != ChannelInfo.TYPE_EMITTER) return null;
+            return here.voidFilter();
+        }
+        if (selectedSubchannelId == null) return null;
+        ItemSubchannel sub = currentChannel.itemConfig().subchannel(selectedSubchannelId);
+        return sub == null ? null : sub.filter();
+    }
+
+    private Component currentEditingLabel() {
+        if (currentChannel == null) {
+            return Component.translatable("gui.quantumchanneling.items.no_subs");
+        }
+        if (editingVoid) return Component.translatable("gui.quantumchanneling.items.editing_void");
+        if (selectedSubchannelId == null) {
+            return Component.translatable("gui.quantumchanneling.items.no_subs");
+        }
+        ItemSubchannel sub = currentChannel.itemConfig().subchannel(selectedSubchannelId);
+        String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
+        return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
+    }
+
+    private void cycleSelection(int direction) {
+        if (currentChannel == null) return;
+        boolean emitter = isCurrentEmitter();
+        java.util.List<Object> cycle = new java.util.ArrayList<>();
+        if (emitter) cycle.add("VOID");
+        for (var s : currentChannel.itemConfig().subchannels()) cycle.add(s.id());
+        if (cycle.isEmpty()) return;
+        int idx = -1;
+        for (int i = 0; i < cycle.size(); i++) {
+            Object o = cycle.get(i);
+            if (editingVoid && o.equals("VOID")) { idx = i; break; }
+            if (!editingVoid && selectedSubchannelId != null
+                    && o instanceof UUID u && u.equals(selectedSubchannelId)) { idx = i; break; }
+        }
+        if (idx == -1) idx = 0;
+        int next = ((idx + direction) % cycle.size() + cycle.size()) % cycle.size();
+        Object n = cycle.get(next);
+        if (n.equals("VOID")) { editingVoid = true; selectedSubchannelId = null; }
+        else { editingVoid = false; selectedSubchannelId = (UUID) n; }
+        rebuildAll();
+    }
+
+    private boolean isCurrentEmitter() {
+        ChannelInfo.MemberPos here = findThisDevice();
+        return here != null && here.type() == ChannelInfo.TYPE_EMITTER;
+    }
+
     private @Nullable ChannelInfo.MemberPos findThisDevice() {
         if (currentChannel == null) return null;
         var pos = menu.getBlockPos();
@@ -2414,191 +2855,45 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return null;
     }
 
-    /** Returns the filter the user is currently editing on the Items panel, or null when invalid. */
-    private @Nullable ItemFilter resolveItemsTargetFilter() {
-        if (currentChannel == null) return null;
-        ItemChannelConfig cfg = currentChannel.itemConfig();
-        if (itemsTarget == 0) return cfg.mainFilter();
-        if (itemsTarget == 1) return cfg.voidFilter();
-        int subIdx = itemsTarget - 2;
-        ItemSubchannel sub = cfg.subchannel(subIdx);
-        return sub == null ? null : sub.filter();
+    private static @Nullable ResourceLocation filterItemAtSlot(ItemFilter f, int slotIdx) {
+        if (f == null || slotIdx < 0) return null;
+        int i = 0;
+        for (var id : f.items()) {
+            if (i == slotIdx) return id;
+            i++;
+        }
+        return null;
     }
 
-    /** "Add" button handler: parses the input, applies "minecraft:" prefix if missing, sends packet. */
-    private void applyAddFilterEntry() {
-        if (currentChannel == null || itemsFilterAddInput == null) return;
-        String raw = itemsFilterAddInput.getValue().trim();
-        if (raw.isEmpty()) return;
-        if (!raw.contains(":")) raw = "minecraft:" + raw;
-        ResourceLocation id;
-        try { id = new ResourceLocation(raw); } catch (Exception e) { return; }
-        ModMessages.sendToServer(new AddItemFilterEntryPacket(currentChannel.id(), itemsTarget, id));
-        itemsFilterAddInput.setValue("");
+    private void sendAddItem(ResourceLocation id) {
+        if (currentChannel == null) return;
+        if (editingVoid) {
+            ModMessages.sendToServer(new AddEmitterVoidItemPacket(menu.getBlockPos(), id));
+        } else if (selectedSubchannelId != null) {
+            ModMessages.sendToServer(new AddSubchannelItemPacket(
+                    currentChannel.id(), selectedSubchannelId, id));
+        }
     }
 
-    private void renderItemsPanel(GuiGraphics gfx, int mouseX, int mouseY) {
-        int cx = leftPos + 8;
-        int rw = BG_W - 16;
-
-        if (currentChannel == null) {
-            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.unbound")
-                    .withStyle(ChatFormatting.GRAY), cx, topPos + CONTENT_TOP + 4, 0xAAAAAA, false);
-            return;
+    private void sendRemoveItem(ResourceLocation id) {
+        if (currentChannel == null) return;
+        if (editingVoid) {
+            ModMessages.sendToServer(new RemoveEmitterVoidItemPacket(menu.getBlockPos(), id));
+        } else if (selectedSubchannelId != null) {
+            ModMessages.sendToServer(new RemoveSubchannelItemPacket(
+                    currentChannel.id(), selectedSubchannelId, id));
         }
-
-        // Top row labels already covered by the two PhotonButtons; nothing extra needed there.
-
-        // Per-device sub-channel label + click-to-cycle hit box.
-        ChannelInfo.MemberPos here = findThisDevice();
-        int subIdx = here != null ? here.subchannelIndex() : -1;
-        String subLabel = subIdx < 0 ? "Main"
-                : ("Sub " + (subIdx + 1) + " — " + currentChannel.itemConfig().subchannel(subIdx).name());
-        int subRowY = topPos + CONTENT_TOP + 28;
-        gfx.drawString(font, Component.translatable("gui.quantumchanneling.items.device_subchannel"),
-                cx, subRowY + 4, 0xFFCCCCCC, false);
-        int subPillX = cx + 110;
-        int subPillW = rw - 110;
-        boolean hoverSub = mouseX >= subPillX && mouseX < subPillX + subPillW
-                && mouseY >= subRowY && mouseY < subRowY + 14;
-        int accent = accentColor();
-        gfx.fill(subPillX, subRowY, subPillX + subPillW, subRowY + 14, hoverSub ? 0xFF1F2840 : 0xFF14202E);
-        gfx.fill(subPillX, subRowY, subPillX + subPillW, subRowY + 1, accent);
-        gfx.drawString(font, Component.literal(subLabel), subPillX + 6, subRowY + 4, 0xFFEAF0FF, false);
-
-        // Target selector row — 7 small pills: Main / Void / 1..5.
-        int targetRowY = topPos + CONTENT_TOP + 46;
-        int pillW = (rw - 6) / ITEMS_TARGET_COUNT;
-        for (int i = 0; i < ITEMS_TARGET_COUNT; i++) {
-            int px = cx + i * (pillW + 1);
-            boolean sel = i == itemsTarget;
-            boolean hover = mouseX >= px && mouseX < px + pillW && mouseY >= targetRowY && mouseY < targetRowY + 14;
-            int border = sel ? accent : (hover ? blendARGB(accent, 0xFF000000, 0.4f) : 0xFF2A3140);
-            int body = sel ? 0xFF1F2840 : (hover ? 0xFF18202E : 0xFF0B0E14);
-            gfx.fill(px - 1, targetRowY - 1, px + pillW + 1, targetRowY + 14 + 1, border);
-            gfx.fill(px, targetRowY, px + pillW, targetRowY + 14, body);
-            String label = i == 0 ? "Main" : i == 1 ? "Void" : String.valueOf(i - 1);
-            int lw = font.width(label);
-            gfx.drawString(font, Component.literal(label),
-                    px + (pillW - lw) / 2, targetRowY + 3,
-                    sel ? 0xFFFFFFFF : 0xFFB0B8C8, false);
-        }
-
-        // Filter mode toggle button is rendered by buildItemsPanel via PhotonButton. We just draw
-        // the section header here.
-        gfx.drawString(font, targetHeaderLabel(),
-                cx, topPos + CONTENT_TOP + 66, accent, false);
-
-        // Inventory-style slot grid — each slot is a JEI / EMI ghost-drop target. Filled slots
-        // render the item icon and accept clicks to remove. Empty slots accept drops to add.
-        ItemFilter f = resolveItemsTargetFilter();
-        ItemStack hoveredStack = null;
-        for (int i = 0; i < ITEMS_SLOTS_VISIBLE; i++) {
-            var r = getItemsSlotRect(i);
-            if (r == null) continue;
-            int sx = r.getX(), sy = r.getY();
-            ResourceLocation id = filterItemAtSlot(f, i);
-            ItemStack stack = ItemStack.EMPTY;
-            if (id != null) {
-                var item = net.minecraft.core.registries.BuiltInRegistries.ITEM.get(id);
-                if (item != net.minecraft.world.item.Items.AIR) stack = new ItemStack(item);
-            }
-            boolean hover = mouseX >= sx && mouseX < sx + ITEMS_SLOT_SIZE
-                    && mouseY >= sy && mouseY < sy + ITEMS_SLOT_SIZE;
-            int border = hover ? accent : blendARGB(accent, 0xFF000000, 0.6f);
-            int inner  = hover ? 0xFF1A2030 : 0xFF0C1018;
-            gfx.fill(sx, sy, sx + ITEMS_SLOT_SIZE, sy + ITEMS_SLOT_SIZE, border);
-            gfx.fill(sx + 1, sy + 1, sx + ITEMS_SLOT_SIZE - 1, sy + ITEMS_SLOT_SIZE - 1, inner);
-            if (!stack.isEmpty()) {
-                gfx.renderItem(stack, sx + 1, sy + 1);
-                gfx.renderItemDecorations(font, stack, sx + 1, sy + 1);
-                if (hover) hoveredStack = stack;
-            }
-        }
-        // Tooltip for the hovered slot — rendered last so it stacks above the grid.
-        if (hoveredStack != null) gfx.renderTooltip(font, hoveredStack, mouseX, mouseY);
-        // Overflow indicator below the grid when more items are in the filter than the grid shows.
-        int filterSize = f == null ? 0 : f.size();
-        if (filterSize > ITEMS_SLOTS_VISIBLE) {
-            gfx.drawString(font, Component.literal("… +" + (filterSize - ITEMS_SLOTS_VISIBLE) + " more"),
-                    cx + 4, topPos + CONTENT_TOP + 80 + ITEMS_SLOT_ROWS * ITEMS_SLOT_SIZE + 2,
-                    0xFF808890, false);
-        }
-
-        // Footer: buffer fill indicator + a brief hint line.
-        int footerY = topPos + BG_H - 40;
-        Component buf = Component.translatable("gui.quantumchanneling.items.buffer",
-                currentChannel.itemBufferFill(), currentChannel.itemBufferCap());
-        gfx.drawString(font, buf, cx, footerY, 0xFFB0B8C8, false);
     }
 
-    /** Translated label for the currently-selected filter target ("Main filter", "Void list", "Sub N"). */
-    private Component targetHeaderLabel() {
-        if (itemsTarget == 0) return Component.translatable("gui.quantumchanneling.items.header_main");
-        if (itemsTarget == 1) return Component.translatable("gui.quantumchanneling.items.header_void");
-        int subIdx = itemsTarget - 2;
-        String subName = currentChannel != null
-                ? currentChannel.itemConfig().subchannel(subIdx).name() : "";
-        return Component.translatable("gui.quantumchanneling.items.header_sub",
-                subIdx + 1, subName.isEmpty() ? "—" : subName);
+    private void sendToggleFilterMode() {
+        if (currentChannel == null) return;
+        // Void is locked to "items in list → voided" semantics; only subchannel filters expose WL/BL.
+        if (editingVoid || selectedSubchannelId == null) return;
+        ItemFilter cur = resolveCurrentFilter();
+        if (cur == null) return;
+        ModMessages.sendToServer(new SetSubchannelFilterModePacket(
+                currentChannel.id(), selectedSubchannelId, !cur.isWhitelist()));
     }
 
-    /** Trims a string to fit within the given pixel width, appending "…" when truncated. */
-    private String trimToWidth(String s, int maxPx) {
-        if (font.width(s) <= maxPx) return s;
-        while (s.length() > 1 && font.width(s + "…") > maxPx) s = s.substring(0, s.length() - 1);
-        return s + "…";
-    }
-
-    /**
-     * Handles clicks inside the Items panel. Returns true when the click is consumed
-     * (a target pill, a sub-channel pill, or a row remove ✕).
-     */
-    private boolean handleItemsPanelClick(double mx, double my) {
-        if (activeMode != ResourceMode.ITEMS || currentChannel == null) return false;
-        int cx = leftPos + 8;
-        int rw = BG_W - 16;
-
-        // Sub-channel cycler row
-        int subRowY = topPos + CONTENT_TOP + 28;
-        int subPillX = cx + 110;
-        int subPillW = rw - 110;
-        if (mx >= subPillX && mx < subPillX + subPillW && my >= subRowY && my < subRowY + 14) {
-            ChannelInfo.MemberPos here = findThisDevice();
-            int cur = here != null ? here.subchannelIndex() : -1;
-            int next = cur + 1;
-            if (next >= ItemChannelConfig.SUBCHANNEL_COUNT) next = -1;
-            ModMessages.sendToServer(new SetDeviceSubchannelPacket(menu.getBlockPos(), next));
-            return true;
-        }
-
-        // Target selector row
-        int targetRowY = topPos + CONTENT_TOP + 46;
-        if (my >= targetRowY && my < targetRowY + 14) {
-            int pillW = (rw - 6) / ITEMS_TARGET_COUNT;
-            for (int i = 0; i < ITEMS_TARGET_COUNT; i++) {
-                int px = cx + i * (pillW + 1);
-                if (mx >= px && mx < px + pillW) {
-                    itemsTarget = i;
-                    rebuildAll();
-                    return true;
-                }
-            }
-        }
-
-        // Click on a filled slot in the inventory-style grid → remove that entry from the filter.
-        int slot = getItemsSlotAt((int) mx, (int) my);
-        if (slot >= 0) {
-            ItemFilter f = resolveItemsTargetFilter();
-            ResourceLocation id = filterItemAtSlot(f, slot);
-            if (id != null) {
-                ModMessages.sendToServer(new RemoveItemFilterEntryPacket(
-                        currentChannel.id(), itemsTarget, id));
-            }
-            // Even for empty slots we consume the click — JEI/EMI handle ghost-drops separately
-            // and we don't want this click to fall through to widgets below.
-            return true;
-        }
-        return false;
-    }
 }
+

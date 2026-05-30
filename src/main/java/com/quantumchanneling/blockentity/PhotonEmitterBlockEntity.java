@@ -4,13 +4,17 @@ import com.quantumchanneling.Config;
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.menu.PhotonNodeMenu;
 import com.quantumchanneling.channel.ChannelData;
+import com.quantumchanneling.channel.ItemFilter;
 import com.quantumchanneling.channel.ItemTransitHelper;
 import com.quantumchanneling.channel.QuantumChannel;
 import com.quantumchanneling.channel.ResourceMode;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.GlobalPos;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.MenuProvider;
@@ -30,7 +34,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -68,9 +74,42 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     private LazyOptional<IEnergyStorage> energyCap = LazyOptional.of(() -> energyIO);
 
     /**
+     * Per-emitter void filter. Defaults to {@link ItemFilter#ItemFilter(boolean) blacklist mode
+     * with no entries} so a fresh emitter voids nothing.
+     */
+    private final ItemFilter voidFilter = new ItemFilter(false);
+
+    /**
+     * Per-item decision cache. Wiped whenever {@link QuantumChannel#itemConfig()#maskVersion()} or
+     * this BE's {@link #getLocalEditCount() local edit count} changes.
+     */
+    private final Map<ResourceLocation, ItemTransitHelper.Decision> decisionCache = new HashMap<>();
+    private int cachedChannelMaskVersion = -1;
+    private int cachedLocalEditCount = -1;
+
+    public ItemFilter voidFilter() { return voidFilter; }
+
+    /** Cache-respecting wrapper around {@link ItemTransitHelper#evaluate}. */
+    public ItemTransitHelper.Decision decide(QuantumChannel channel, ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return ItemTransitHelper.Decision.REJECT;
+        int channelMV = channel == null ? -1 : channel.itemConfig().maskVersion();
+        int localMV = getLocalEditCount();
+        if (channelMV != cachedChannelMaskVersion || localMV != cachedLocalEditCount) {
+            decisionCache.clear();
+            cachedChannelMaskVersion = channelMV;
+            cachedLocalEditCount = localMV;
+        }
+        ResourceLocation id = ItemTransitHelper.idOf(stack);
+        if (id == null) return ItemTransitHelper.Decision.REJECT;
+        MinecraftServer server = (level instanceof ServerLevel sl) ? sl.getServer() : null;
+        return decisionCache.computeIfAbsent(id,
+                k -> ItemTransitHelper.evaluate(server, this, channel, stack));
+    }
+
+    /**
      * Virtual single-slot item handler. AE2 importers, RS exporters, hoppers, and anything else
      * pushing items via {@link IItemHandler#insertItem} hit this. Inserts run through the same
-     * filter + void + buffer routing path as the active tick.
+     * void + subscribed-subchannels + direct-push pipeline as the active tick.
      */
     private final IItemHandler itemIO = new IItemHandler() {
         @Override public int getSlots() { return 1; }
@@ -80,13 +119,13 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         @Override public @NotNull ItemStack extractItem(int slot, int amount, boolean simulate) { return ItemStack.EMPTY; }
         @Override
         public @NotNull ItemStack insertItem(int slot, @NotNull ItemStack stack, boolean simulate) {
-            if (stack.isEmpty() || getResourceMode() != ResourceMode.ITEMS) return stack;
-            if (!(level instanceof ServerLevel server)) return stack;
+            if (stack.isEmpty()) return stack;
+            if (!(level instanceof ServerLevel sl)) return stack;
             UUID channelId = getChannelId();
             if (channelId == null) return stack;
-            QuantumChannel net = ChannelData.get(server.getServer()).getChannel(channelId);
+            QuantumChannel net = ChannelData.get(sl.getServer()).getChannel(channelId);
             if (net == null) return stack;
-            return ItemTransitHelper.routeToBuffer(net, stack, simulate);
+            return ItemTransitHelper.route(sl, PhotonEmitterBlockEntity.this, net, stack, simulate);
         }
     };
     private LazyOptional<IItemHandler> itemCap = LazyOptional.of(() -> itemIO);
@@ -202,8 +241,9 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
 
     @Override
     public @NotNull <T> LazyOptional<T> getCapability(@NotNull Capability<T> cap, @Nullable Direction side) {
-        if (cap == ForgeCapabilities.ENERGY && getResourceMode() == ResourceMode.ENERGY) return energyCap.cast();
-        if (cap == ForgeCapabilities.ITEM_HANDLER && getResourceMode() == ResourceMode.ITEMS) return itemCap.cast();
+        // All-in-one transport: every device exposes every resource cap simultaneously.
+        if (cap == ForgeCapabilities.ENERGY) return energyCap.cast();
+        if (cap == ForgeCapabilities.ITEM_HANDLER) return itemCap.cast();
         return super.getCapability(cap, side);
     }
 
@@ -265,10 +305,8 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
 
         if (getChannelId() == null) return;
 
-        if (getResourceMode() == ResourceMode.ITEMS) {
-            tickItemsMode(level);
-            return;
-        }
+        // Energy + items run side-by-side. Items only acts every other tick (rate-limited).
+        tickItemsMode(level);
 
         int budget = effectiveBudget(Config.emitterPushRate);
         for (Direction side : Direction.values()) {
@@ -288,19 +326,56 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     }
 
     /**
-     * One step of the items-mode tick. Rate-limited to roughly "1 stack / 2 ticks" by only doing
-     * work on even ticks; one cycle pulls up to {@link com.quantumchanneling.channel.ItemChannelConfig#batchSize()}
-     * items from the first adjacent IItemHandler that produces something matching the channel's filter.
+     * One step of the items-mode tick. Throttled to <b>one transfer per second</b> (every 20 ticks)
+     * during testing so each routing decision is visible in the world frame-by-frame. The batch
+     * size is also clamped to 1 here so the user can watch a single item walk through the system
+     * each cycle — flip TEST_ITEMS_PER_TICK_INTERVAL back to a smaller number (and remove the
+     * batch=1 clamp) once the algorithm is proven.
      */
+    private static final long TEST_ITEMS_PER_TICK_INTERVAL = 20L;
     private void tickItemsMode(ServerLevel level) {
-        if ((level.getGameTime() & 1L) != 0L) return;            // every-other-tick gating
+        if (level.getGameTime() % TEST_ITEMS_PER_TICK_INTERVAL != 0L) return;
         UUID channelId = getChannelId();
         if (channelId == null) return;
         QuantumChannel net = ChannelData.get(level.getServer()).getChannel(channelId);
         if (net == null) return;
-        int batch = net.itemConfig().batchSize();
-        int moved = ItemTransitHelper.pullFromAdjacentInto(level, this, net, batch);
-        if (moved > 0) forwardedThisTick = moved;                // reuses the throughput history for items-as-count
+        int batch = 1;   // testing: one item per cycle, so transfers are observable
+        int moved = ItemTransitHelper.pullFromAdjacentAndRoute(level, this, net, batch);
+        if (moved > 0) forwardedThisTick = moved;
+    }
+
+    @Override
+    protected void saveAdditional(CompoundTag tag) {
+        super.saveAdditional(tag);
+        // Only save the void filter when non-default to keep NBT lean.
+        if (!voidFilter.items().isEmpty() || voidFilter.isWhitelist()) {
+            tag.put("VoidFilter", voidFilter.save());
+        }
+    }
+
+    @Override
+    protected void onLeavingChannel(QuantumChannel channel) {
+        if (level instanceof ServerLevel sl) {
+            channel.unregisterAllForEmitter(GlobalPos.of(sl.dimension(), getBlockPos()));
+        }
+    }
+
+    @Override
+    protected void onJoiningChannel(QuantumChannel channel) {
+        if (level instanceof ServerLevel sl) {
+            GlobalPos gp = GlobalPos.of(sl.dimension(), getBlockPos());
+            for (UUID subId : getSubscribedSubchannels()) {
+                channel.registerEmitterSubscription(gp, subId);
+            }
+        }
+    }
+
+    @Override
+    public void load(CompoundTag tag) {
+        super.load(tag);
+        if (tag.contains("VoidFilter", Tag.TAG_COMPOUND)) {
+            voidFilter.copyFrom(ItemFilter.load(tag.getCompound("VoidFilter")));
+        }
     }
 
     private int forwardToChannel(int amount, boolean simulate) {

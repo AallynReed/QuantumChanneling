@@ -52,12 +52,8 @@ public record ChannelInfo(
          * Empty when no one is actively charging (subscribed-but-full players don't appear).
          */
         List<ChargingNowEntry> chargingNow,
-        /** Per-channel item-mode settings. Always present (defaults are sensible). */
-        ItemChannelConfig itemConfig,
-        /** How many stacks are currently in the channel's in-flight item buffer. */
-        int itemBufferFill,
-        /** Cap on the in-flight item buffer (stacks). */
-        int itemBufferCap
+        /** Per-channel item-mode settings (dynamic subchannels). Always present. */
+        ItemChannelConfig itemConfig
 ) {
 
     public int slotPriority(int slotBit) {
@@ -139,8 +135,10 @@ public record ChannelInfo(
             String dim, long packedPos,
             byte type, int priority, boolean surge, boolean chunkLoaded, int cap, int lastTickRate,
             String customName,
-            ResourceMode resourceMode,
-            int subchannelIndex
+            /** Subchannels this device subscribes to (ordered: emitter priority, receiver display). */
+            List<UUID> subscribedSubchannels,
+            /** Per-emitter void filter. Always serialized; only meaningful for emitters. */
+            ItemFilter voidFilter
     ) {
         public void write(FriendlyByteBuf b) {
             b.writeUtf(dim, 80);
@@ -152,8 +150,9 @@ public record ChannelInfo(
             b.writeVarInt(cap);
             b.writeVarInt(lastTickRate);
             b.writeUtf(customName, 64);
-            resourceMode.write(b);
-            b.writeVarInt(subchannelIndex);
+            b.writeVarInt(subscribedSubchannels.size());
+            for (UUID id : subscribedSubchannels) b.writeUUID(id);
+            voidFilter.write(b);
         }
         public static MemberPos read(FriendlyByteBuf b) {
             String dim = b.readUtf(80);
@@ -165,9 +164,11 @@ public record ChannelInfo(
             int cap = b.readVarInt();
             int rate = b.readVarInt();
             String name = b.readUtf(64);
-            ResourceMode rm = ResourceMode.read(b);
-            int subIdx = b.readVarInt();
-            return new MemberPos(dim, pos, type, pri, surge, cl, cap, rate, name, rm, subIdx);
+            int n = b.readVarInt();
+            List<UUID> subs = new ArrayList<>(n);
+            for (int i = 0; i < n; i++) subs.add(b.readUUID());
+            ItemFilter voidF = ItemFilter.read(b);
+            return new MemberPos(dim, pos, type, pri, surge, cl, cap, rate, name, subs, voidF);
         }
         public BlockPos pos() { return BlockPos.of(packedPos); }
         public String typeName() {
@@ -219,8 +220,6 @@ public record ChannelInfo(
         buf.writeVarInt(chargingNow.size());
         for (ChargingNowEntry c : chargingNow) c.write(buf);
         itemConfig.write(buf);
-        buf.writeVarInt(itemBufferFill);
-        buf.writeVarInt(itemBufferCap);
     }
 
     public static ChannelInfo read(FriendlyByteBuf buf) {
@@ -258,11 +257,9 @@ public record ChannelInfo(
         List<ChargingNowEntry> cnow = new ArrayList<>(cn);
         for (int i = 0; i < cn; i++) cnow.add(ChargingNowEntry.read(buf));
         ItemChannelConfig icfg = ItemChannelConfig.read(buf);
-        int bufFill = buf.readVarInt();
-        int bufCap = buf.readVarInt();
         return new ChannelInfo(id, name, owner, ownerName, members, canManage, isPublic, slots, subscribed,
                 emitterCount, receiverCount, totalIn, totalOut, color, hasPin, pin, canUse,
-                sh, sho, si, sa, sc, armorPr, ps, ms, cnow, icfg, bufFill, bufCap);
+                sh, sho, si, sa, sc, armorPr, ps, ms, cnow, icfg);
     }
 
     public static ChannelInfo from(QuantumChannel net, @Nullable UUID viewerId, boolean subscribed, MinecraftServer server) {
@@ -289,8 +286,8 @@ public record ChannelInfo(
             int priority = 0, cap = ChannelBoundBlockEntity.DEFAULT_CAP, rate = 0;
             boolean surge = false, chunkLoaded = false;
             String customName = "";
-            ResourceMode resourceMode = ResourceMode.ENERGY;
-            int subIdx = -1;
+            List<UUID> subs = new ArrayList<>();
+            ItemFilter voidFilterCopy = new ItemFilter(false);   // default (blacklist empty) for non-emitters
             ServerLevel level = server.getLevel(gp.dimension());
             if (level != null && level.isLoaded(gp.pos())) {
                 BlockEntity be = level.getBlockEntity(gp.pos());
@@ -300,11 +297,11 @@ public record ChannelInfo(
                     chunkLoaded = bound.isChunkLoadForced();
                     cap = bound.getThroughputCap();
                     customName = bound.getCustomName();
-                    resourceMode = bound.getResourceMode();
-                    subIdx = bound.getSubchannelIndex();
+                    subs.addAll(bound.getSubscribedSubchannels());
                 }
                 if (be instanceof PhotonEmitterBlockEntity em) {
                     type = TYPE_EMITTER; emitterCount++; rate = em.getLastTickThroughput(); totalIn += rate;
+                    voidFilterCopy.copyFrom(em.voidFilter());
                 } else if (be instanceof PhotonReceiverBlockEntity rc) {
                     type = TYPE_RECEIVER; receiverCount++; rate = rc.getLastTickThroughput(); totalOut += rate;
                 } else if (be instanceof PhotonStorageBlockEntity st) {
@@ -316,7 +313,7 @@ public record ChannelInfo(
                 }
             }
             ms.add(new MemberPos(dim, packed, type, priority, surge, chunkLoaded, cap, rate,
-                    customName, resourceMode, subIdx));
+                    customName, subs, voidFilterCopy));
         }
         boolean canManage = net.canManage(viewerId);
         boolean canUse = net.canUse(viewerId);
@@ -370,6 +367,6 @@ public record ChannelInfo(
                 new int[]{ net.armorPiecePriority(0), net.armorPiecePriority(1),
                            net.armorPiecePriority(2), net.armorPiecePriority(3) },
                 ps, ms, chargingNow,
-                net.itemConfig(), net.itemBufferSize(), net.itemBufferCap());
+                net.itemConfig());
     }
 }

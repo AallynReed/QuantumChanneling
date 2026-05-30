@@ -4,11 +4,7 @@ import com.quantumchanneling.Config;
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.menu.PhotonNodeMenu;
 import com.quantumchanneling.channel.ChannelData;
-import com.quantumchanneling.channel.ItemFilter;
-import com.quantumchanneling.channel.ItemSubchannel;
-import com.quantumchanneling.channel.ItemTransitHelper;
 import com.quantumchanneling.channel.QuantumChannel;
-import com.quantumchanneling.channel.ResourceMode;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.GlobalPos;
@@ -57,62 +53,19 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
     private LazyOptional<IEnergyStorage> energyCap = LazyOptional.of(() -> energyIO);
 
     /**
-     * Virtual single-slot item handler. External pullers (AE2 exporters, RS exporters, hoppers
-     * below a receiver) extract via this — items come from the channel buffer filtered by this
-     * device's sub-channel binding.
+     * Receivers are now passive: the emitter pushes items directly into the receiver's adjacent
+     * inventory, no buffer. This cap is intentionally inert (zero slots) so external pullers
+     * don't try to extract from a non-existent buffer; the receiver's role is purely "drop point".
      */
     private final IItemHandler itemIO = new IItemHandler() {
-        @Override public int getSlots() { return 1; }
-        @Override
-        public @NotNull ItemStack getStackInSlot(int slot) {
-            QuantumChannel net = currentChannel();
-            if (net == null) return ItemStack.EMPTY;
-            return ItemTransitHelper.peekOrTake(net, resolveSubchannelFilter(net), true);
-        }
-        @Override public int getSlotLimit(int slot) { return 64; }
+        @Override public int getSlots() { return 0; }
+        @Override public @NotNull ItemStack getStackInSlot(int slot) { return ItemStack.EMPTY; }
+        @Override public int getSlotLimit(int slot) { return 0; }
         @Override public boolean isItemValid(int slot, @NotNull ItemStack stack) { return false; }
-        @Override
-        public @NotNull ItemStack insertItem(int slot, @NotNull ItemStack stack, boolean simulate) { return stack; }
-        @Override
-        public @NotNull ItemStack extractItem(int slot, int amount, boolean simulate) {
-            if (amount <= 0 || getResourceMode() != ResourceMode.ITEMS) return ItemStack.EMPTY;
-            QuantumChannel net = currentChannel();
-            if (net == null) return ItemStack.EMPTY;
-            ItemStack peek = ItemTransitHelper.peekOrTake(net, resolveSubchannelFilter(net), true);
-            if (peek.isEmpty()) return ItemStack.EMPTY;
-            int take = Math.min(amount, peek.getCount());
-            if (simulate) {
-                ItemStack copy = peek.copy();
-                copy.setCount(take);
-                return copy;
-            }
-            // Real take: drain the head, splice off only `take` items, push the remainder back.
-            ItemStack head = ItemTransitHelper.peekOrTake(net, resolveSubchannelFilter(net), false);
-            if (head.isEmpty()) return ItemStack.EMPTY;
-            if (take >= head.getCount()) return head;
-            ItemStack out = head.copy();
-            out.setCount(take);
-            head.shrink(take);
-            net.itemBuffer().addFirst(head);                       // remainder rejoins the head of the queue
-            return out;
-        }
+        @Override public @NotNull ItemStack insertItem(int slot, @NotNull ItemStack stack, boolean simulate) { return stack; }
+        @Override public @NotNull ItemStack extractItem(int slot, int amount, boolean simulate) { return ItemStack.EMPTY; }
     };
     private LazyOptional<IItemHandler> itemCap = LazyOptional.of(() -> itemIO);
-
-    /** Returns the channel this receiver is bound to, or null if unbound / channel gone. */
-    private @Nullable QuantumChannel currentChannel() {
-        if (!(level instanceof ServerLevel sl)) return null;
-        UUID id = getChannelId();
-        return id == null ? null : ChannelData.get(sl.getServer()).getChannel(id);
-    }
-
-    /** Returns null for "main trunk" binding, or the sub-channel's filter when bound to one. */
-    private @Nullable ItemFilter resolveSubchannelFilter(QuantumChannel net) {
-        int idx = getSubchannelIndex();
-        if (idx < 0) return null;
-        ItemSubchannel sub = net.itemConfig().subchannel(idx);
-        return sub == null ? null : sub.filter();
-    }
 
     private final ContainerData containerData = new ContainerData() {
         @Override
@@ -221,8 +174,9 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
 
     @Override
     public @NotNull <T> LazyOptional<T> getCapability(@NotNull Capability<T> cap, @Nullable Direction side) {
-        if (cap == ForgeCapabilities.ENERGY && getResourceMode() == ResourceMode.ENERGY) return energyCap.cast();
-        if (cap == ForgeCapabilities.ITEM_HANDLER && getResourceMode() == ResourceMode.ITEMS) return itemCap.cast();
+        // All-in-one transport: every device exposes every resource cap simultaneously.
+        if (cap == ForgeCapabilities.ENERGY) return energyCap.cast();
+        if (cap == ForgeCapabilities.ITEM_HANDLER) return itemCap.cast();
         return super.getCapability(cap, side);
     }
 
@@ -254,41 +208,15 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
             if (updated != state) level.setBlock(pos, updated, 2);
         }
 
-        if (getResourceMode() == ResourceMode.ITEMS) {
-            tickItemsMode(level);
-            return;
-        }
+        // Items: receivers are passive — emitters push directly into the receiver's adjacent
+        // inventory each tick, so there's no per-tick work to do on the items side.
 
-        // Top up adjacent machines from channel storage when emitter input alone isn't enough.
+        // Energy: top up adjacent machines from channel storage when emitter input alone isn't enough.
         // This makes Photon Storage actually act as a reservoir: when the receiver's neighbours need
         // FE and there's still budget headroom this tick, we drain storage on the channel and
         // forward it. Emitter-pushed energy still gets here first (acceptAndForward runs during the
         // emitter's tick), so this only covers the shortfall.
         pullFromChannelStorageAndForward(level);
-    }
-
-    /**
-     * One step of the items-mode active push. Every other tick, take one buffered stack matching
-     * this receiver's sub-channel binding and try to deposit it into a 6-neighbour IItemHandler.
-     * Unaccepted remainder is returned to the front of the buffer.
-     */
-    private void tickItemsMode(ServerLevel level) {
-        if ((level.getGameTime() & 1L) != 0L) return;            // every-other-tick gating
-        QuantumChannel net = currentChannel();
-        if (net == null) return;
-        ItemStack head = ItemTransitHelper.peekOrTake(net, resolveSubchannelFilter(net), false);
-        if (head.isEmpty()) return;
-        int batch = net.itemConfig().batchSize();
-        int take = Math.min(batch, head.getCount());
-        ItemStack toPush = head.copy();
-        toPush.setCount(take);
-        if (take < head.getCount()) {
-            head.shrink(take);
-            net.itemBuffer().addFirst(head);
-        }
-        ItemStack rejected = ItemTransitHelper.pushToAdjacent(level, this, toPush);
-        if (!rejected.isEmpty()) net.itemBuffer().addFirst(rejected);
-        forwardedThisTick = take - rejected.getCount();          // tracks items moved for stats
     }
 
     /**

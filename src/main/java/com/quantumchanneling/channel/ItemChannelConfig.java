@@ -4,83 +4,130 @@ import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.resources.ResourceLocation;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.Collection;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 
 /**
- * Per-channel item-transfer settings: master enable, batch size, main filter, void filter, and
- * {@link #SUBCHANNEL_COUNT} virtual sub-channels for routing.
+ * Channel-level item-transfer settings. Holds the master enable, batch size, and a dynamic
+ * collection of subchannels keyed by stable {@link UUID}. The void filter has moved off the
+ * channel and onto each emitter (so different emitters can void different things).
  *
- * <p>Default behaviour is a no-op: disabled, blacklist with no entries (allows everything), void
- * list empty (nothing voided), batch size 64 (one full stack per cycle).
+ * <p>The {@link #maskVersion} counter is bumped on every mutation that could change routing
+ * outcomes; emitters compare it against their last-seen version to know when to wipe their
+ * per-item decision cache. Renames bump it too — cheap, and it keeps callers from having to
+ * distinguish "structural" edits from cosmetic ones.
  */
 public class ItemChannelConfig {
-    public static final int SUBCHANNEL_COUNT = 5;
+    public static final int MAX_SUBCHANNELS = 32;
     public static final int DEFAULT_BATCH = 64;
     public static final int MIN_BATCH = 1;
-    /** A vanilla stack is at most 64; cap a single-tick movement at 9 stacks (one hotbar row). */
+    /** Up to 9 stacks per cycle (one hotbar row). */
     public static final int MAX_BATCH = 64 * 9;
 
     private boolean enabled = false;
     private int batchSize = DEFAULT_BATCH;
-    /** Whether the channel performs an active transfer cycle this tick. Toggles every other tick. */
-    private final ItemFilter mainFilter = new ItemFilter(false);   // default: blacklist (everything passes)
-    private final ItemFilter voidFilter = new ItemFilter(true);    // default: whitelist with no entries (nothing voided)
-    private final ItemSubchannel[] subchannels = new ItemSubchannel[SUBCHANNEL_COUNT];
-
-    public ItemChannelConfig() {
-        for (int i = 0; i < SUBCHANNEL_COUNT; i++) subchannels[i] = new ItemSubchannel("");
-    }
+    /** LinkedHashMap so {@code subchannels()} returns insertion-ordered for stable UI listing. */
+    private final LinkedHashMap<UUID, ItemSubchannel> subchannels = new LinkedHashMap<>();
+    private int maskVersion = 0;
 
     public boolean isEnabled() { return enabled; }
-    public void setEnabled(boolean v) { this.enabled = v; }
+    public void setEnabled(boolean v) {
+        if (v != enabled) { enabled = v; bump(); }
+    }
 
     public int batchSize() { return batchSize; }
     public void setBatchSize(int b) {
-        this.batchSize = Math.max(MIN_BATCH, Math.min(MAX_BATCH, b));
+        int v = Math.max(MIN_BATCH, Math.min(MAX_BATCH, b));
+        if (v != batchSize) { batchSize = v; bump(); }
     }
 
-    public ItemFilter mainFilter() { return mainFilter; }
-    public ItemFilter voidFilter() { return voidFilter; }
-    public ItemSubchannel subchannel(int idx) {
-        if (idx < 0 || idx >= SUBCHANNEL_COUNT) return null;
-        return subchannels[idx];
-    }
-    public ItemSubchannel[] subchannels() { return subchannels; }
+    public int maskVersion() { return maskVersion; }
+    private void bump() { maskVersion++; }
 
-    /**
-     * Returns true when {@code stack} should be voided (silently consumed during transit).
-     * Void list is interpreted as a whitelist of items-to-discard.
-     */
-    public boolean isVoided(ItemStack stack) {
-        // voidFilter is always whitelist semantically — items in the list are voided.
-        // We override semantics here so the UI can show it cleanly as a "void list".
-        if (stack == null || stack.isEmpty()) return false;
-        return voidFilter.contains(net.minecraft.core.registries.BuiltInRegistries.ITEM
-                .getKey(stack.getItem()));
+    public Collection<ItemSubchannel> subchannels() {
+        return Collections.unmodifiableCollection(subchannels.values());
+    }
+    public @Nullable ItemSubchannel subchannel(UUID id) { return subchannels.get(id); }
+    public int subchannelCount() { return subchannels.size(); }
+    public boolean contains(UUID id) { return subchannels.containsKey(id); }
+
+    /** Creates a new subchannel; returns its {@link UUID} or null when the cap is reached. */
+    public @Nullable UUID createSubchannel(String name) {
+        if (subchannels.size() >= MAX_SUBCHANNELS) return null;
+        UUID id = UUID.randomUUID();
+        subchannels.put(id, new ItemSubchannel(id, name));
+        bump();
+        return id;
+    }
+
+    public boolean deleteSubchannel(UUID id) {
+        if (subchannels.remove(id) == null) return false;
+        bump();
+        return true;
+    }
+
+    public boolean renameSubchannel(UUID id, String newName) {
+        ItemSubchannel s = subchannels.get(id);
+        if (s == null) return false;
+        s.setName(newName);
+        bump();
+        return true;
+    }
+
+    public boolean setSubchannelFilterMode(UUID id, boolean whitelist) {
+        ItemSubchannel s = subchannels.get(id);
+        if (s == null) return false;
+        if (s.filter().isWhitelist() == whitelist) return false;
+        s.filter().setWhitelist(whitelist);
+        bump();
+        return true;
+    }
+
+    public boolean addSubchannelItem(UUID id, ResourceLocation itemId) {
+        ItemSubchannel s = subchannels.get(id);
+        if (s == null) return false;
+        if (!s.filter().add(itemId)) return false;
+        bump();
+        return true;
+    }
+
+    public boolean removeSubchannelItem(UUID id, ResourceLocation itemId) {
+        ItemSubchannel s = subchannels.get(id);
+        if (s == null) return false;
+        if (!s.filter().remove(itemId)) return false;
+        bump();
+        return true;
     }
 
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
         tag.putBoolean("Enabled", enabled);
         tag.putInt("BatchSize", batchSize);
-        tag.put("Main", mainFilter.save());
-        tag.put("Void", voidFilter.save());
-        ListTag subs = new ListTag();
-        for (ItemSubchannel s : subchannels) subs.add(s.save());
-        tag.put("Subs", subs);
+        tag.putInt("MaskVersion", maskVersion);
+        ListTag list = new ListTag();
+        for (ItemSubchannel s : subchannels.values()) list.add(s.save());
+        tag.put("Subs", list);
         return tag;
     }
 
     public static ItemChannelConfig load(CompoundTag tag) {
         ItemChannelConfig c = new ItemChannelConfig();
         c.enabled = tag.getBoolean("Enabled");
-        if (tag.contains("BatchSize")) c.setBatchSize(tag.getInt("BatchSize"));
-        if (tag.contains("Main", Tag.TAG_COMPOUND)) c.mainFilter.copyFrom(ItemFilter.load(tag.getCompound("Main")));
-        if (tag.contains("Void", Tag.TAG_COMPOUND)) c.voidFilter.copyFrom(ItemFilter.load(tag.getCompound("Void")));
+        if (tag.contains("BatchSize")) c.batchSize =
+                Math.max(MIN_BATCH, Math.min(MAX_BATCH, tag.getInt("BatchSize")));
+        if (tag.contains("MaskVersion")) c.maskVersion = tag.getInt("MaskVersion");
         if (tag.contains("Subs", Tag.TAG_LIST)) {
-            ListTag subs = tag.getList("Subs", Tag.TAG_COMPOUND);
-            int n = Math.min(subs.size(), SUBCHANNEL_COUNT);
-            for (int i = 0; i < n; i++) c.subchannels[i] = ItemSubchannel.load(subs.getCompound(i));
+            ListTag list = tag.getList("Subs", Tag.TAG_COMPOUND);
+            for (int i = 0; i < list.size(); i++) {
+                ItemSubchannel s = ItemSubchannel.load(list.getCompound(i));
+                c.subchannels.put(s.id(), s);
+            }
         }
         return c;
     }
@@ -88,18 +135,41 @@ public class ItemChannelConfig {
     public void write(FriendlyByteBuf buf) {
         buf.writeBoolean(enabled);
         buf.writeVarInt(batchSize);
-        mainFilter.write(buf);
-        voidFilter.write(buf);
-        for (ItemSubchannel s : subchannels) s.write(buf);
+        buf.writeVarInt(maskVersion);
+        buf.writeVarInt(subchannels.size());
+        for (ItemSubchannel s : subchannels.values()) s.write(buf);
     }
 
     public static ItemChannelConfig read(FriendlyByteBuf buf) {
         ItemChannelConfig c = new ItemChannelConfig();
         c.enabled = buf.readBoolean();
-        c.setBatchSize(buf.readVarInt());
-        c.mainFilter.copyFrom(ItemFilter.read(buf));
-        c.voidFilter.copyFrom(ItemFilter.read(buf));
-        for (int i = 0; i < SUBCHANNEL_COUNT; i++) c.subchannels[i] = ItemSubchannel.read(buf);
+        c.batchSize = Math.max(MIN_BATCH, Math.min(MAX_BATCH, buf.readVarInt()));
+        c.maskVersion = buf.readVarInt();
+        int n = buf.readVarInt();
+        for (int i = 0; i < n; i++) {
+            ItemSubchannel s = ItemSubchannel.read(buf);
+            c.subchannels.put(s.id(), s);
+        }
         return c;
+    }
+
+    /** Restores this instance from another. Used by NBT load on the channel. */
+    public void copyFrom(ItemChannelConfig other) {
+        if (other == null) return;
+        this.enabled = other.enabled;
+        this.batchSize = other.batchSize;
+        this.maskVersion = other.maskVersion;
+        this.subchannels.clear();
+        this.subchannels.putAll(other.subchannels);
+    }
+
+    /**
+     * Returns a {@link Map} keyed by subchannel name for clients that need name-based lookup
+     * (e.g. UI showing user-typed names). The returned map is not live.
+     */
+    public Map<String, ItemSubchannel> byName() {
+        LinkedHashMap<String, ItemSubchannel> out = new LinkedHashMap<>();
+        for (ItemSubchannel s : subchannels.values()) out.put(s.name(), s);
+        return out;
     }
 }

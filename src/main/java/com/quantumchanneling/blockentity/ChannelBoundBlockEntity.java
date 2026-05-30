@@ -2,11 +2,11 @@ package com.quantumchanneling.blockentity;
 
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.channel.ChannelData;
-import com.quantumchanneling.channel.ItemChannelConfig;
-import com.quantumchanneling.channel.ResourceMode;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.nbt.ListTag;
+import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -14,6 +14,10 @@ import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraftforge.common.world.ForgeChunkManager;
 import org.jetbrains.annotations.Nullable;
+
+import java.util.Collections;
+import java.util.LinkedHashSet;
+import java.util.Set;
 
 import java.util.Objects;
 import java.util.UUID;
@@ -34,13 +38,14 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
     /** User-defined label shown in the device's title bar and Nodes list. Empty = use block name. */
     private String customName = "";
 
-    /** Which resource this device handles. Default ENERGY preserves legacy behaviour. */
-    private ResourceMode resourceMode = ResourceMode.ENERGY;
     /**
-     * Sub-channel binding for items-mode routing. -1 = main trunk (any item passing the channel's
-     * main filter); 0..{@link ItemChannelConfig#SUBCHANNEL_COUNT}-1 = bound to that sub-channel's filter.
+     * Subchannels (by stable {@link java.util.UUID}) this device subscribes to. For emitters the
+     * iteration order is the priority "rule book" — earlier subchannels are tried first; for
+     * receivers the order is only display-relevant.
      */
-    private int subchannelIndex = -1;
+    private final LinkedHashSet<java.util.UUID> subscribedSubchannels = new LinkedHashSet<>();
+    /** Bumped by subclasses whenever a local-only setting changes that an emitter's mask must see. */
+    private int localEditCount = 0;
 
     protected ChannelBoundBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
@@ -55,12 +60,26 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         if (level != null && !level.isClientSide && level.getServer() != null) {
             ChannelData data = ChannelData.get(level.getServer());
             GlobalPos here = GlobalPos.of(level.dimension(), getBlockPos());
-            if (old != null) data.removeMember(old, here);
-            if (id != null) data.addMember(id, here);
+            if (old != null) {
+                com.quantumchanneling.channel.QuantumChannel oldCh = data.getChannel(old);
+                if (oldCh != null) onLeavingChannel(oldCh);
+                data.removeMember(old, here);
+            }
+            if (id != null) {
+                data.addMember(id, here);
+                com.quantumchanneling.channel.QuantumChannel newCh = data.getChannel(id);
+                if (newCh != null) onJoiningChannel(newCh);
+            }
         }
         setChanged();
         return true;
     }
+
+    /** Subclasses override to clean up channel-side state (e.g. emitter reverse index entries). */
+    protected void onLeavingChannel(com.quantumchanneling.channel.QuantumChannel channel) {}
+
+    /** Subclasses override to seed channel-side state (e.g. register emitter subscriptions). */
+    protected void onJoiningChannel(com.quantumchanneling.channel.QuantumChannel channel) {}
 
     public boolean isChunkLoadForced() { return forceChunkLoaded; }
 
@@ -93,19 +112,51 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         if (!trimmed.equals(customName)) { customName = trimmed; setChanged(); }
     }
 
-    public ResourceMode getResourceMode() { return resourceMode; }
-    public void setResourceMode(ResourceMode m) {
-        if (m == null || m == resourceMode) return;
-        resourceMode = m;
-        setChanged();
+    /**
+     * Insertion-ordered subscription set. The {@link Set} is unmodifiable; mutate via the
+     * {@link #addSubscribedSubchannel} / {@link #removeSubscribedSubchannel} / {@link #moveSubscribedSubchannel}
+     * helpers so callers can't bypass the local-edit bookkeeping.
+     */
+    public Set<java.util.UUID> getSubscribedSubchannels() {
+        return Collections.unmodifiableSet(subscribedSubchannels);
     }
 
-    /** -1 = main trunk; 0..{@link ItemChannelConfig#SUBCHANNEL_COUNT}-1 = bound sub-channel. */
-    public int getSubchannelIndex() { return subchannelIndex; }
-    public void setSubchannelIndex(int idx) {
-        int v = Math.max(-1, Math.min(ItemChannelConfig.SUBCHANNEL_COUNT - 1, idx));
-        if (v != subchannelIndex) { subchannelIndex = v; setChanged(); }
+    public boolean isSubscribedTo(java.util.UUID subId) {
+        return subId != null && subscribedSubchannels.contains(subId);
     }
+
+    public boolean addSubscribedSubchannel(java.util.UUID subId) {
+        if (subId == null) return false;
+        if (!subscribedSubchannels.add(subId)) return false;
+        bumpLocalEdit();
+        return true;
+    }
+
+    public boolean removeSubscribedSubchannel(java.util.UUID subId) {
+        if (!subscribedSubchannels.remove(subId)) return false;
+        bumpLocalEdit();
+        return true;
+    }
+
+    /** Moves {@code subId} up ({@code direction = -1}) or down ({@code direction = +1}) in iteration order. */
+    public boolean moveSubscribedSubchannel(java.util.UUID subId, int direction) {
+        if (subId == null || direction == 0 || !subscribedSubchannels.contains(subId)) return false;
+        java.util.UUID[] arr = subscribedSubchannels.toArray(new java.util.UUID[0]);
+        int idx = -1;
+        for (int i = 0; i < arr.length; i++) if (arr[i].equals(subId)) { idx = i; break; }
+        if (idx < 0) return false;
+        int target = idx + (direction < 0 ? -1 : 1);
+        if (target < 0 || target >= arr.length) return false;
+        java.util.UUID tmp = arr[idx]; arr[idx] = arr[target]; arr[target] = tmp;
+        subscribedSubchannels.clear();
+        for (java.util.UUID id : arr) subscribedSubchannels.add(id);
+        bumpLocalEdit();
+        return true;
+    }
+
+    /** Monotonically increasing counter — emitters compare it against their cached value. */
+    public int getLocalEditCount() { return localEditCount; }
+    public void bumpLocalEdit() { localEditCount++; setChanged(); }
 
     /**
      * Resolves the actual per-tick FE budget. Surge overrides the per-device cap entirely. Otherwise:
@@ -160,6 +211,8 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
     public void unbindFromChannelOnBreak() {
         if (channelId != null && level instanceof ServerLevel sl) {
             ChannelData data = ChannelData.get(sl.getServer());
+            com.quantumchanneling.channel.QuantumChannel ch = data.getChannel(channelId);
+            if (ch != null) onLeavingChannel(ch);
             data.removeMember(channelId, GlobalPos.of(sl.dimension(), getBlockPos()));
             channelId = null;
         }
@@ -174,8 +227,15 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         if (priority != 0) tag.putInt("Priority", priority);
         if (surgeMode) tag.putBoolean("Surge", true);
         if (!customName.isEmpty()) tag.putString("CustomName", customName);
-        if (resourceMode != ResourceMode.ENERGY) tag.putString("ResourceMode", resourceMode.name());
-        if (subchannelIndex != -1) tag.putInt("SubchannelIndex", subchannelIndex);
+        if (!subscribedSubchannels.isEmpty()) {
+            ListTag subs = new ListTag();
+            for (java.util.UUID id : subscribedSubchannels) {
+                CompoundTag e = new CompoundTag();
+                e.putUUID("Id", id);
+                subs.add(e);
+            }
+            tag.put("SubscribedSubs", subs);
+        }
     }
 
     @Override
@@ -187,9 +247,14 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         priority = tag.getInt("Priority");
         surgeMode = tag.getBoolean("Surge");
         customName = tag.contains("CustomName") ? tag.getString("CustomName") : "";
-        resourceMode = ResourceMode.fromName(tag.getString("ResourceMode"));
-        subchannelIndex = tag.contains("SubchannelIndex") ? tag.getInt("SubchannelIndex") : -1;
-        if (subchannelIndex < -1 || subchannelIndex >= ItemChannelConfig.SUBCHANNEL_COUNT) subchannelIndex = -1;
+        subscribedSubchannels.clear();
+        if (tag.contains("SubscribedSubs", Tag.TAG_LIST)) {
+            ListTag subs = tag.getList("SubscribedSubs", Tag.TAG_COMPOUND);
+            for (int i = 0; i < subs.size(); i++) {
+                CompoundTag e = subs.getCompound(i);
+                if (e.hasUUID("Id")) subscribedSubchannels.add(e.getUUID("Id"));
+            }
+        }
     }
 
     public GlobalPos globalPos() {

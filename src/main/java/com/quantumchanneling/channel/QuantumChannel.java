@@ -8,13 +8,10 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import org.jetbrains.annotations.Nullable;
 
-import java.util.ArrayDeque;
 import java.util.Collections;
-import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -53,14 +50,16 @@ public class QuantumChannel {
     /** Players an admin has banned from wireless charging on this channel. Persisted. */
     private final Set<UUID> chargingBlocked = new HashSet<>();
 
-    /** Item-transfer settings: enabled, batch size, filters, sub-channels. Persisted. */
-    private ItemChannelConfig itemConfig = new ItemChannelConfig();
+    /** Item-transfer settings: enabled, batch size, dynamic subchannels. Persisted. */
+    private final ItemChannelConfig itemConfig = new ItemChannelConfig();
+
     /**
-     * In-flight item buffer for this channel. Transient — items in transit are dropped on world
-     * save/load. Capped at {@link #ITEM_BUFFER_CAP} stacks to bound memory.
+     * Reverse index: subchannel UUID → set of emitter positions that subscribe to it. A subchannel
+     * with an empty entry here is auto-deleted from {@link #itemConfig} (per design: subchannels
+     * only exist while at least one emitter routes through them). Persisted so the invariant
+     * survives chunk unloads / world restarts.
      */
-    private final Deque<ItemStack> itemBuffer = new ArrayDeque<>();
-    public static final int ITEM_BUFFER_CAP = 256;
+    private final Map<UUID, Set<GlobalPos>> subchannelEmitters = new HashMap<>();
 
     public QuantumChannel(UUID id, String name, @Nullable UUID ownerId, String ownerName) {
         this.id = id;
@@ -158,17 +157,50 @@ public class QuantumChannel {
     /* ---- items ---- */
 
     public ItemChannelConfig itemConfig() { return itemConfig; }
-    public Deque<ItemStack> itemBuffer() { return itemBuffer; }
-    public int itemBufferSize() { return itemBuffer.size(); }
-    public int itemBufferCap() { return ITEM_BUFFER_CAP; }
-    public boolean isItemBufferFull() { return itemBuffer.size() >= ITEM_BUFFER_CAP; }
 
-    /** Adds {@code stack} to the buffer (a copy is taken). Returns true if it fit. */
-    public boolean enqueueItem(ItemStack stack) {
-        if (stack == null || stack.isEmpty()) return false;
-        if (itemBuffer.size() >= ITEM_BUFFER_CAP) return false;
-        itemBuffer.addLast(stack.copy());
-        return true;
+    /**
+     * Records that {@code emitterPos} subscribes to {@code subId}. Called from the subscribe
+     * packet handler when the device is an emitter. No-op if the subchannel doesn't exist.
+     */
+    public void registerEmitterSubscription(GlobalPos emitterPos, UUID subId) {
+        if (subId == null || emitterPos == null) return;
+        if (!itemConfig.contains(subId)) return;
+        subchannelEmitters.computeIfAbsent(subId, k -> new HashSet<>()).add(emitterPos);
+    }
+
+    /**
+     * Removes {@code emitterPos} from {@code subId}'s subscriber set. If that empties the set,
+     * the subchannel is auto-deleted (orphan cleanup).
+     */
+    public void unregisterEmitterSubscription(GlobalPos emitterPos, UUID subId) {
+        if (subId == null || emitterPos == null) return;
+        Set<GlobalPos> set = subchannelEmitters.get(subId);
+        if (set == null) return;
+        if (!set.remove(emitterPos)) return;
+        if (set.isEmpty()) {
+            subchannelEmitters.remove(subId);
+            itemConfig.deleteSubchannel(subId);
+        }
+    }
+
+    /** Sweeps {@code emitterPos} out of every reverse-index set; auto-deletes any now-orphan subchannels. */
+    public void unregisterAllForEmitter(GlobalPos emitterPos) {
+        if (emitterPos == null) return;
+        var it = subchannelEmitters.entrySet().iterator();
+        while (it.hasNext()) {
+            var entry = it.next();
+            if (entry.getValue().remove(emitterPos) && entry.getValue().isEmpty()) {
+                UUID sub = entry.getKey();
+                it.remove();
+                itemConfig.deleteSubchannel(sub);
+            }
+        }
+    }
+
+    /** Number of distinct emitter positions registered against {@code subId}. */
+    public int countEmitterSubscribers(UUID subId) {
+        Set<GlobalPos> set = subchannelEmitters.get(subId);
+        return set == null ? 0 : set.size();
     }
 
     public void refreshOwnerName(String n) { if (n != null) this.ownerName = n; }
@@ -224,6 +256,23 @@ public class QuantumChannel {
         }
         // Items config (always saved so default-blacklist/empty-void is recoverable).
         tag.put("ItemConfig", itemConfig.save());
+        if (!subchannelEmitters.isEmpty()) {
+            ListTag idx = new ListTag();
+            for (var e : subchannelEmitters.entrySet()) {
+                CompoundTag entry = new CompoundTag();
+                entry.putUUID("Sub", e.getKey());
+                ListTag positions = new ListTag();
+                for (GlobalPos gp : e.getValue()) {
+                    CompoundTag g = new CompoundTag();
+                    g.putString("Dim", gp.dimension().location().toString());
+                    g.putLong("Pos", gp.pos().asLong());
+                    positions.add(g);
+                }
+                entry.put("Emitters", positions);
+                idx.add(entry);
+            }
+            tag.put("SubchannelEmitters", idx);
+        }
 
         ListTag mem = new ListTag();
         for (GlobalPos gp : members) {
@@ -273,7 +322,24 @@ public class QuantumChannel {
             }
         }
         if (tag.contains("ItemConfig", Tag.TAG_COMPOUND)) {
-            net.itemConfig = ItemChannelConfig.load(tag.getCompound("ItemConfig"));
+            net.itemConfig.copyFrom(ItemChannelConfig.load(tag.getCompound("ItemConfig")));
+        }
+        if (tag.contains("SubchannelEmitters", Tag.TAG_LIST)) {
+            ListTag idx = tag.getList("SubchannelEmitters", Tag.TAG_COMPOUND);
+            for (int i = 0; i < idx.size(); i++) {
+                CompoundTag entry = idx.getCompound(i);
+                if (!entry.hasUUID("Sub")) continue;
+                UUID sub = entry.getUUID("Sub");
+                ListTag positions = entry.getList("Emitters", Tag.TAG_COMPOUND);
+                Set<GlobalPos> set = new HashSet<>();
+                for (int j = 0; j < positions.size(); j++) {
+                    CompoundTag g = positions.getCompound(j);
+                    ResourceKey<Level> dim = ResourceKey.create(Registries.DIMENSION,
+                            new ResourceLocation(g.getString("Dim")));
+                    set.add(GlobalPos.of(dim, BlockPos.of(g.getLong("Pos"))));
+                }
+                if (!set.isEmpty()) net.subchannelEmitters.put(sub, set);
+            }
         }
 
         ListTag mem = tag.getList("Members", Tag.TAG_COMPOUND);

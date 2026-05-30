@@ -189,75 +189,71 @@ public class ChannelData extends SavedData {
 
     /* ---- item-mode config (all gated by canManage) ---- */
 
-    /**
-     * Filter targets for the per-channel item config. Stable wire ordinals — never reorder.
-     * 0 = main filter, 1 = void list, 2..6 = sub-channel 0..4.
-     */
-    public static int filterTargetSub(int subIdx) { return 2 + subIdx; }
-
-    private @Nullable ItemFilter resolveFilter(QuantumChannel net, int target) {
-        if (net == null) return null;
-        if (target == 0) return net.itemConfig().mainFilter();
-        if (target == 1) return net.itemConfig().voidFilter();
-        int subIdx = target - 2;
-        ItemSubchannel sub = net.itemConfig().subchannel(subIdx);
-        return sub == null ? null : sub.filter();
-    }
-
-    public boolean setItemEnabled(UUID id, @Nullable UUID actor, boolean enabled) {
-        QuantumChannel net = networks.get(id);
+    public boolean setItemEnabled(UUID channelId, @Nullable UUID actor, boolean enabled) {
+        QuantumChannel net = networks.get(channelId);
         if (net == null || !net.canManage(actor)) return false;
         net.itemConfig().setEnabled(enabled);
         setDirty();
         return true;
     }
 
-    public boolean setItemBatchSize(UUID id, @Nullable UUID actor, int batchSize) {
-        QuantumChannel net = networks.get(id);
+    public boolean setItemBatchSize(UUID channelId, @Nullable UUID actor, int batchSize) {
+        QuantumChannel net = networks.get(channelId);
         if (net == null || !net.canManage(actor)) return false;
         net.itemConfig().setBatchSize(batchSize);
         setDirty();
         return true;
     }
 
-    public boolean setItemFilterMode(UUID id, @Nullable UUID actor, int target, boolean whitelist) {
-        QuantumChannel net = networks.get(id);
-        if (net == null || !net.canManage(actor)) return false;
-        ItemFilter f = resolveFilter(net, target);
-        if (f == null) return false;
-        f.setWhitelist(whitelist);
-        setDirty();
-        return true;
+    /** Returns the new subchannel's id, or null on failure (cap reached / not authorized). */
+    public @Nullable UUID createSubchannel(UUID channelId, @Nullable UUID actor, String name) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return null;
+        UUID id = net.itemConfig().createSubchannel(name);
+        if (id != null) setDirty();
+        return id;
     }
 
-    public boolean addItemFilterEntry(UUID id, @Nullable UUID actor, int target, net.minecraft.resources.ResourceLocation itemId) {
-        QuantumChannel net = networks.get(id);
+    public boolean deleteSubchannel(UUID channelId, @Nullable UUID actor, UUID subId) {
+        QuantumChannel net = networks.get(channelId);
         if (net == null || !net.canManage(actor)) return false;
-        ItemFilter f = resolveFilter(net, target);
-        if (f == null) return false;
-        boolean added = f.add(itemId);
-        if (added) setDirty();
-        return added;
+        boolean ok = net.itemConfig().deleteSubchannel(subId);
+        if (ok) setDirty();
+        return ok;
     }
 
-    public boolean removeItemFilterEntry(UUID id, @Nullable UUID actor, int target, net.minecraft.resources.ResourceLocation itemId) {
-        QuantumChannel net = networks.get(id);
+    public boolean renameSubchannel(UUID channelId, @Nullable UUID actor, UUID subId, String name) {
+        QuantumChannel net = networks.get(channelId);
         if (net == null || !net.canManage(actor)) return false;
-        ItemFilter f = resolveFilter(net, target);
-        if (f == null) return false;
-        boolean removed = f.remove(itemId);
-        if (removed) setDirty();
-        return removed;
+        boolean ok = net.itemConfig().renameSubchannel(subId, name);
+        if (ok) setDirty();
+        return ok;
     }
 
-    public boolean setSubchannelName(UUID id, @Nullable UUID actor, int subIdx, String name) {
-        QuantumChannel net = networks.get(id);
+    public boolean setSubchannelFilterMode(UUID channelId, @Nullable UUID actor, UUID subId, boolean whitelist) {
+        QuantumChannel net = networks.get(channelId);
         if (net == null || !net.canManage(actor)) return false;
-        ItemSubchannel sub = net.itemConfig().subchannel(subIdx);
-        if (sub == null) return false;
-        sub.setName(name);
-        setDirty();
-        return true;
+        boolean ok = net.itemConfig().setSubchannelFilterMode(subId, whitelist);
+        if (ok) setDirty();
+        return ok;
+    }
+
+    public boolean addSubchannelItem(UUID channelId, @Nullable UUID actor, UUID subId,
+                                     net.minecraft.resources.ResourceLocation itemId) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.itemConfig().addSubchannelItem(subId, itemId);
+        if (ok) setDirty();
+        return ok;
+    }
+
+    public boolean removeSubchannelItem(UUID channelId, @Nullable UUID actor, UUID subId,
+                                        net.minecraft.resources.ResourceLocation itemId) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.itemConfig().removeSubchannelItem(subId, itemId);
+        if (ok) setDirty();
+        return ok;
     }
 
     /**

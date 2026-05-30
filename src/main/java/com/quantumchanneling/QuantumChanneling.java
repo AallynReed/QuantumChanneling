@@ -63,6 +63,10 @@ public class QuantumChanneling {
     public static final RegistryObject<Item> QUANTUM_CORE = ITEMS.register("quantum_core",
             () -> new TooltipItem(new Item.Properties(), "tooltip.quantumchanneling.quantum_core"));
 
+    /** Portable device-config "blueprint" — captures and applies emitter/receiver settings. */
+    public static final RegistryObject<Item> PHOTON_CONFIG_CARD = ITEMS.register("photon_config_card",
+            () -> new com.quantumchanneling.item.PhotonConfigCard(new Item.Properties().stacksTo(1)));
+
     /** True when any of the 6 PhotonShape connection booleans is set — drives the lit/dim glow on emitter/receiver. */
     private static boolean hasAnyConnection(net.minecraft.world.level.block.state.BlockState state) {
         try {
@@ -172,6 +176,7 @@ public class QuantumChanneling {
                     .icon(() -> QUANTUM_CORE.get().getDefaultInstance())
                     .displayItems((parameters, output) -> {
                         output.accept(QUANTUM_CORE.get());
+                        output.accept(PHOTON_CONFIG_CARD.get());
                         output.accept(PHOTON_EMITTER_ITEM.get());
                         output.accept(PHOTON_RECEIVER_ITEM.get());
                         output.accept(PHOTON_STORAGE_T1.get());

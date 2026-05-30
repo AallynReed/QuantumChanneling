@@ -16,6 +16,7 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.energy.IEnergyStorage;
+import net.minecraftforge.items.IItemHandler;
 
 import java.util.EnumMap;
 import java.util.Map;
@@ -119,14 +120,26 @@ public final class PhotonShape {
         }
     }
 
-    /** Whether the neighbor on side {@code dir} satisfies {@code mode}. */
+    /**
+     * Whether the neighbor on side {@code dir} satisfies {@code mode}. All-in-one transport means
+     * a device draws a connector arm toward ANY neighbor that exposes one of the resource caps the
+     * device can route — energy (FE) or items (IItemHandler). The energy check still honors
+     * source/sink discrimination (an emitter only draws to extractable energy stores), but any
+     * IItemHandler is a valid items-side neighbor regardless of mode since items flow both ways.
+     */
     public static boolean detectConnection(BlockGetter level, BlockPos pos, Direction dir, ConnectionMode mode) {
         if (mode == ConnectionMode.NONE) return false;
         BlockEntity neighbor = level.getBlockEntity(pos.relative(dir));
         if (neighbor == null) return false;
-        IEnergyStorage cap = neighbor.getCapability(ForgeCapabilities.ENERGY, dir.getOpposite()).orElse(null);
-        if (cap == null) return false;
-        return mode.wants(cap);
+        Direction face = dir.getOpposite();
+
+        IEnergyStorage energy = neighbor.getCapability(ForgeCapabilities.ENERGY, face).orElse(null);
+        if (energy != null && mode.wants(energy)) return true;
+
+        IItemHandler items = neighbor.getCapability(ForgeCapabilities.ITEM_HANDLER, face).orElse(null);
+        if (items != null && items.getSlots() > 0) return true;
+
+        return false;
     }
 
     /**

@@ -7,18 +7,23 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.network.NetworkEvent;
 
+import java.util.UUID;
 import java.util.function.Supplier;
 
-/** Set a device's items-mode sub-channel binding. -1 = main trunk; 0..4 = sub-channel slot. */
-public record SetDeviceSubchannelPacket(BlockPos pos, int subIdx) {
-    public static void encode(SetDeviceSubchannelPacket p, FriendlyByteBuf b) {
+/**
+ * Client → server: reorder one device's subchannel subscription up ({@code direction = -1}) or
+ * down ({@code direction = +1}) in the priority list. No-op for receivers (order is decorative).
+ */
+public record MoveDeviceSubchannelPacket(BlockPos pos, UUID subId, int direction) {
+    public static void encode(MoveDeviceSubchannelPacket p, FriendlyByteBuf b) {
         b.writeBlockPos(p.pos);
-        b.writeVarInt(p.subIdx);
+        b.writeUUID(p.subId);
+        b.writeVarInt(p.direction);
     }
-    public static SetDeviceSubchannelPacket decode(FriendlyByteBuf b) {
-        return new SetDeviceSubchannelPacket(b.readBlockPos(), b.readVarInt());
+    public static MoveDeviceSubchannelPacket decode(FriendlyByteBuf b) {
+        return new MoveDeviceSubchannelPacket(b.readBlockPos(), b.readUUID(), b.readVarInt());
     }
-    public static void handle(SetDeviceSubchannelPacket p, Supplier<NetworkEvent.Context> sup) {
+    public static void handle(MoveDeviceSubchannelPacket p, Supplier<NetworkEvent.Context> sup) {
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
@@ -28,7 +33,9 @@ public record SetDeviceSubchannelPacket(BlockPos pos, int subIdx) {
             double dz = p.pos.getZ() + 0.5 - player.getZ();
             if (dx * dx + dy * dy + dz * dz > 64.0) return;
             BlockEntity be = player.level().getBlockEntity(p.pos);
-            if (be instanceof ChannelBoundBlockEntity bound) bound.setSubchannelIndex(p.subIdx);
+            if (be instanceof ChannelBoundBlockEntity bound) {
+                bound.moveSubscribedSubchannel(p.subId, p.direction);
+            }
         });
         ctx.setPacketHandled(true);
     }
