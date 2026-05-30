@@ -189,8 +189,13 @@
   "gui.quantumchanneling.resource.items":  "Items",
   "gui.quantumchanneling.resource.fluids": "Fluids",
   "gui.quantumchanneling.resource.gases":  "Gases",
+  "gui.quantumchanneling.resource.heat":   "Heat",
   "gui.quantumchanneling.resource.coming_soon_title": "Coming soon",
   "gui.quantumchanneling.resource.coming_soon_body":  "This resource mode is not yet implemented. Switch back to Energy.",
+  "gui.quantumchanneling.resource.locked_title":      "Locked",
+  "gui.quantumchanneling.resource.fluids.locked_body": "No active fluid provider detected. Vanilla Forge fluids are always available — this state shouldn't appear.",
+  "gui.quantumchanneling.resource.gases.locked_body":  "Install Mekanism to enable gas routing. Without a gas provider mod loaded, this side-tab has nothing to connect to.",
+  "gui.quantumchanneling.resource.heat.locked_body":   "Install Mekanism to enable heat routing. Heat needs a mod that exposes an IHeatHandler-style capability for blocks to thermally interact with.",
 
   "gui.quantumchanneling.items.enabled":              "ITEMS: ON",
   "gui.quantumchanneling.items.disabled":             "ITEMS: OFF",
@@ -214,5 +219,15 @@
   "gui.quantumchanneling.items.priority_down":        "Down ▼",
   "gui.quantumchanneling.items.priority_up.tip":      "Move this subchannel higher in this emitter's routing list. Higher entries fire first when an item could match either.",
   "gui.quantumchanneling.items.priority_down.tip":    "Move this subchannel lower in this emitter's routing list. Lower entries only fire when nothing earlier matched.",
-  "gui.quantumchanneling.items.empty_state":          "No subchannels yet. Type a name above and click + Sub to create one."
+  "gui.quantumchanneling.items.empty_state":          "No subchannels yet. Type a name above and click + Sub to create one.",
+  "gui.quantumchanneling.fluids.enabled":             "FLUIDS: ON",
+  "gui.quantumchanneling.fluids.disabled":            "FLUIDS: OFF",
+  "gui.quantumchanneling.fluids.sub_count":           "Fluid subchannels on this channel: %s",
+  "gui.quantumchanneling.gas.enabled":                "GAS: ON",
+  "gui.quantumchanneling.gas.disabled":               "GAS: OFF",
+  "gui.quantumchanneling.gas.body":                   "Gas routing — create subchannels, filter by gas type, subscribe receivers. Mirrors the items/fluids workflow.",
+  "gui.quantumchanneling.gas.sub_count":              "Gas subchannels on this channel: %s",
+  "gui.quantumchanneling.heat.enabled":               "HEAT BUS: ON",
+  "gui.quantumchanneling.heat.disabled":              "HEAT BUS: OFF",
+  "gui.quantumchanneling.heat.body":                  "Heat acts as a thermal wire across the channel. Each tick, neighbors of all subscribed devices are averaged toward a common temperature (weighted by their heat capacity), and a fraction of each delta is applied — letting boilers warm distant turbines as if they touched."
 }

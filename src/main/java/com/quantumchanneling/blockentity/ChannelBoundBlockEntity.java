@@ -44,6 +44,23 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
      * receivers the order is only display-relevant.
      */
     private final LinkedHashSet<java.util.UUID> subscribedSubchannels = new LinkedHashSet<>();
+    /**
+     * Parallel subscription list for fluid subchannels. Stored independently because each resource
+     * type owns its own subchannel namespace — subscribing to "Diamonds" (items) is unrelated to
+     * subscribing to "Lava" (fluids), even if a single emitter does both.
+     */
+    private final LinkedHashSet<java.util.UUID> subscribedFluidSubchannels = new LinkedHashSet<>();
+    /** Same shape as the fluid version, but for gas subchannels (Mekanism). */
+    private final LinkedHashSet<java.util.UUID> subscribedGasSubchannels = new LinkedHashSet<>();
+
+    /**
+     * Per-device participation flags. When false, this device doesn't pull/push/accept the named
+     * resource even if it's bound to a channel where other devices are routing it. Default true so
+     * a fresh device just works — users opt out per side, not opt in.
+     */
+    private boolean itemsEnabled = true;
+    private boolean fluidsEnabled = true;
+    private boolean gasEnabled = true;
     /** Bumped by subclasses whenever a local-only setting changes that an emitter's mask must see. */
     private int localEditCount = 0;
 
@@ -154,9 +171,89 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         return true;
     }
 
+    /* ---- fluid subscription parallel ---- */
+
+    public Set<java.util.UUID> getSubscribedFluidSubchannels() {
+        return Collections.unmodifiableSet(subscribedFluidSubchannels);
+    }
+
+    public boolean isSubscribedToFluid(java.util.UUID subId) {
+        return subId != null && subscribedFluidSubchannels.contains(subId);
+    }
+
+    public boolean addSubscribedFluidSubchannel(java.util.UUID subId) {
+        if (subId == null) return false;
+        if (!subscribedFluidSubchannels.add(subId)) return false;
+        bumpLocalEdit();
+        return true;
+    }
+
+    public boolean removeSubscribedFluidSubchannel(java.util.UUID subId) {
+        if (!subscribedFluidSubchannels.remove(subId)) return false;
+        bumpLocalEdit();
+        return true;
+    }
+
+    /* ---- gas subscription parallel ---- */
+
+    public Set<java.util.UUID> getSubscribedGasSubchannels() {
+        return Collections.unmodifiableSet(subscribedGasSubchannels);
+    }
+    public boolean isSubscribedToGas(java.util.UUID subId) {
+        return subId != null && subscribedGasSubchannels.contains(subId);
+    }
+    public boolean addSubscribedGasSubchannel(java.util.UUID subId) {
+        if (subId == null) return false;
+        if (!subscribedGasSubchannels.add(subId)) return false;
+        bumpLocalEdit();
+        return true;
+    }
+    public boolean removeSubscribedGasSubchannel(java.util.UUID subId) {
+        if (!subscribedGasSubchannels.remove(subId)) return false;
+        bumpLocalEdit();
+        return true;
+    }
+    public boolean moveSubscribedGasSubchannel(java.util.UUID subId, int direction) {
+        if (subId == null || direction == 0 || !subscribedGasSubchannels.contains(subId)) return false;
+        java.util.UUID[] arr = subscribedGasSubchannels.toArray(new java.util.UUID[0]);
+        int idx = -1;
+        for (int i = 0; i < arr.length; i++) if (arr[i].equals(subId)) { idx = i; break; }
+        if (idx < 0) return false;
+        int target = idx + (direction < 0 ? -1 : 1);
+        if (target < 0 || target >= arr.length) return false;
+        java.util.UUID tmp = arr[idx]; arr[idx] = arr[target]; arr[target] = tmp;
+        subscribedGasSubchannels.clear();
+        for (java.util.UUID id : arr) subscribedGasSubchannels.add(id);
+        bumpLocalEdit();
+        return true;
+    }
+
+    public boolean moveSubscribedFluidSubchannel(java.util.UUID subId, int direction) {
+        if (subId == null || direction == 0 || !subscribedFluidSubchannels.contains(subId)) return false;
+        java.util.UUID[] arr = subscribedFluidSubchannels.toArray(new java.util.UUID[0]);
+        int idx = -1;
+        for (int i = 0; i < arr.length; i++) if (arr[i].equals(subId)) { idx = i; break; }
+        if (idx < 0) return false;
+        int target = idx + (direction < 0 ? -1 : 1);
+        if (target < 0 || target >= arr.length) return false;
+        java.util.UUID tmp = arr[idx]; arr[idx] = arr[target]; arr[target] = tmp;
+        subscribedFluidSubchannels.clear();
+        for (java.util.UUID id : arr) subscribedFluidSubchannels.add(id);
+        bumpLocalEdit();
+        return true;
+    }
+
     /** Monotonically increasing counter — emitters compare it against their cached value. */
     public int getLocalEditCount() { return localEditCount; }
     public void bumpLocalEdit() { localEditCount++; setChanged(); }
+
+    /* ---- per-device resource enable flags ---- */
+    public boolean isItemsEnabled()  { return itemsEnabled; }
+    public boolean isFluidsEnabled() { return fluidsEnabled; }
+    public boolean isGasEnabled()    { return gasEnabled; }
+    public void setItemsEnabled(boolean v)  { if (v != itemsEnabled)  { itemsEnabled  = v; bumpLocalEdit(); } }
+    public void setFluidsEnabled(boolean v) { if (v != fluidsEnabled) { fluidsEnabled = v; bumpLocalEdit(); } }
+    public void setGasEnabled(boolean v)    { if (v != gasEnabled)    { gasEnabled    = v; bumpLocalEdit(); } }
 
     /**
      * Resolves the actual per-tick FE budget. Surge overrides the per-device cap entirely. Otherwise:
@@ -228,14 +325,18 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         if (surgeMode) tag.putBoolean("Surge", true);
         if (!customName.isEmpty()) tag.putString("CustomName", customName);
         if (!subscribedSubchannels.isEmpty()) {
-            ListTag subs = new ListTag();
-            for (java.util.UUID id : subscribedSubchannels) {
-                CompoundTag e = new CompoundTag();
-                e.putUUID("Id", id);
-                subs.add(e);
-            }
-            tag.put("SubscribedSubs", subs);
+            tag.put("SubscribedSubs", saveUuidList(subscribedSubchannels));
         }
+        if (!subscribedFluidSubchannels.isEmpty()) {
+            tag.put("SubscribedFluidSubs", saveUuidList(subscribedFluidSubchannels));
+        }
+        if (!subscribedGasSubchannels.isEmpty()) {
+            tag.put("SubscribedGasSubs", saveUuidList(subscribedGasSubchannels));
+        }
+        // Only persist disable bits — default-on means a missing tag reads as enabled, keeping NBT lean.
+        if (!itemsEnabled)  tag.putBoolean("ItemsDisabled",  true);
+        if (!fluidsEnabled) tag.putBoolean("FluidsDisabled", true);
+        if (!gasEnabled)    tag.putBoolean("GasDisabled",    true);
     }
 
     @Override
@@ -249,11 +350,35 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         customName = tag.contains("CustomName") ? tag.getString("CustomName") : "";
         subscribedSubchannels.clear();
         if (tag.contains("SubscribedSubs", Tag.TAG_LIST)) {
-            ListTag subs = tag.getList("SubscribedSubs", Tag.TAG_COMPOUND);
-            for (int i = 0; i < subs.size(); i++) {
-                CompoundTag e = subs.getCompound(i);
-                if (e.hasUUID("Id")) subscribedSubchannels.add(e.getUUID("Id"));
-            }
+            loadUuidList(tag.getList("SubscribedSubs", Tag.TAG_COMPOUND), subscribedSubchannels);
+        }
+        subscribedFluidSubchannels.clear();
+        if (tag.contains("SubscribedFluidSubs", Tag.TAG_LIST)) {
+            loadUuidList(tag.getList("SubscribedFluidSubs", Tag.TAG_COMPOUND), subscribedFluidSubchannels);
+        }
+        subscribedGasSubchannels.clear();
+        if (tag.contains("SubscribedGasSubs", Tag.TAG_LIST)) {
+            loadUuidList(tag.getList("SubscribedGasSubs", Tag.TAG_COMPOUND), subscribedGasSubchannels);
+        }
+        itemsEnabled  = !tag.getBoolean("ItemsDisabled");
+        fluidsEnabled = !tag.getBoolean("FluidsDisabled");
+        gasEnabled    = !tag.getBoolean("GasDisabled");
+    }
+
+    private static ListTag saveUuidList(LinkedHashSet<java.util.UUID> set) {
+        ListTag list = new ListTag();
+        for (java.util.UUID id : set) {
+            CompoundTag e = new CompoundTag();
+            e.putUUID("Id", id);
+            list.add(e);
+        }
+        return list;
+    }
+
+    private static void loadUuidList(ListTag list, LinkedHashSet<java.util.UUID> into) {
+        for (int i = 0; i < list.size(); i++) {
+            CompoundTag e = list.getCompound(i);
+            if (e.hasUUID("Id")) into.add(e.getUUID("Id"));
         }
     }
 

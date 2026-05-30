@@ -7,17 +7,17 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.network.NetworkEvent;
 
+import java.util.UUID;
 import java.util.function.Supplier;
 
-/** Client → server: flip the per-device items participation flag. */
-public record SetItemEnabledPacket(BlockPos pos, boolean enabled) {
-    public static void encode(SetItemEnabledPacket p, FriendlyByteBuf b) {
-        b.writeBlockPos(p.pos); b.writeBoolean(p.enabled);
+public record MoveDeviceGasSubchannelPacket(BlockPos pos, UUID subId, int direction) {
+    public static void encode(MoveDeviceGasSubchannelPacket p, FriendlyByteBuf b) {
+        b.writeBlockPos(p.pos); b.writeUUID(p.subId); b.writeVarInt(p.direction);
     }
-    public static SetItemEnabledPacket decode(FriendlyByteBuf b) {
-        return new SetItemEnabledPacket(b.readBlockPos(), b.readBoolean());
+    public static MoveDeviceGasSubchannelPacket decode(FriendlyByteBuf b) {
+        return new MoveDeviceGasSubchannelPacket(b.readBlockPos(), b.readUUID(), b.readVarInt());
     }
-    public static void handle(SetItemEnabledPacket p, Supplier<NetworkEvent.Context> sup) {
+    public static void handle(MoveDeviceGasSubchannelPacket p, Supplier<NetworkEvent.Context> sup) {
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
@@ -27,8 +27,8 @@ public record SetItemEnabledPacket(BlockPos pos, boolean enabled) {
             double dz = p.pos.getZ() + 0.5 - player.getZ();
             if (dx * dx + dy * dy + dz * dz > 64.0) return;
             BlockEntity be = player.level().getBlockEntity(p.pos);
-            if (be instanceof ChannelBoundBlockEntity bound) {
-                bound.setItemsEnabled(p.enabled);
+            if (!(be instanceof ChannelBoundBlockEntity bound)) return;
+            if (bound.moveSubscribedGasSubchannel(p.subId, p.direction)) {
                 CreateChannelPacket.sendListBackTo(player);
             }
         });

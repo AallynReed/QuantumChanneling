@@ -148,6 +148,11 @@ dependencies {
     compileOnly fg.deobf("dev.emi:emi-forge:${emi_version}:api")
     runtimeOnly fg.deobf("dev.emi:emi-forge:${emi_version}")
 
+    // Mekanism — compile-only against the API jar for IGasHandler and IHeatHandler. Mod stays
+    // loadable without Mekanism installed: the gas/heat helper classes are only invoked through
+    // Compat.mekanismLoaded() gates, so absent Mekanism just leaves those code paths cold.
+    compileOnly fg.deobf("mekanism:Mekanism:${minecraft_version}-${mekanism_version}:api")
+
     // Example mod dependency using a mod jar from ./libs with a flat dir repository
     // This maps to ./libs/coolmod-${mc_version}-${coolmod_version}.jar
     // The group id is ignored when searching -- in this case, it is "blank"

@@ -200,6 +200,15 @@ public class QuantumChanneling {
 
         MinecraftForge.EVENT_BUS.register(this);
 
+        // Mekanism integration: gas + heat capability attachment. The class lives in
+        // com.quantumchanneling.compat.mekanism and imports mekanism.api.* types, so we touch it
+        // ONLY when Mekanism is present. The JVM lazy-loads referenced classes on first use, so
+        // this single conditional reference is the load gate.
+        if (net.minecraftforge.fml.ModList.get().isLoaded("mekanism")) {
+            com.quantumchanneling.compat.mekanism.MekanismCapAttacher.register();
+            LOGGER.info("Quantum Channeling: Mekanism detected — gas + heat caps active.");
+        }
+
         context.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
 
         // Validate forced-chunk tickets on world load. Keep all of them — owning BlockEntities

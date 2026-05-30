@@ -8,7 +8,7 @@ import net.minecraft.network.FriendlyByteBuf;
  * for future expansion and currently no-op on the server side.
  */
 public enum ResourceMode {
-    ENERGY, ITEMS, FLUIDS, GASES;
+    ENERGY, ITEMS, FLUIDS, GASES, HEAT;
 
     public static ResourceMode safe(int ordinal) {
         return ordinal >= 0 && ordinal < values().length ? values()[ordinal] : ENERGY;

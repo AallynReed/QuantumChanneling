@@ -1,12 +1,16 @@
 package com.quantumchanneling.client;
 
+import com.quantumchanneling.channel.AddEmitterFluidVoidPacket;
 import com.quantumchanneling.channel.AddEmitterVoidItemPacket;
+import com.quantumchanneling.channel.AddSubchannelFluidPacket;
 import com.quantumchanneling.channel.AddSubchannelItemPacket;
 import com.quantumchanneling.channel.ChannelInfo;
 import com.quantumchanneling.channel.ChargingSlots;
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import com.quantumchanneling.channel.CreateChannelPacket;
+import com.quantumchanneling.channel.CreateFluidSubchannelPacket;
 import com.quantumchanneling.channel.CreateSubchannelPacket;
+import com.quantumchanneling.channel.DeleteFluidSubchannelPacket;
 import com.quantumchanneling.channel.DeleteChannelPacket;
 import com.quantumchanneling.channel.DeleteSubchannelPacket;
 import com.quantumchanneling.channel.ItemChannelConfig;
@@ -14,11 +18,14 @@ import com.quantumchanneling.channel.ItemFilter;
 import com.quantumchanneling.channel.ItemSubchannel;
 import com.quantumchanneling.channel.JoinByPinPacket;
 import com.quantumchanneling.channel.ModMessages;
+import com.quantumchanneling.channel.MoveDeviceFluidSubchannelPacket;
 import com.quantumchanneling.channel.MoveDeviceSubchannelPacket;
 import com.quantumchanneling.channel.OpenChannelsRequestPacket;
 import com.quantumchanneling.channel.Permission;
 import com.quantumchanneling.channel.RemoteUnbindDevicePacket;
+import com.quantumchanneling.channel.RemoveEmitterFluidVoidPacket;
 import com.quantumchanneling.channel.RemoveEmitterVoidItemPacket;
+import com.quantumchanneling.channel.RemoveSubchannelFluidPacket;
 import com.quantumchanneling.channel.RemoveSubchannelItemPacket;
 import com.quantumchanneling.channel.RenameChannelPacket;
 import com.quantumchanneling.channel.RenameDevicePacket;
@@ -34,10 +41,18 @@ import com.quantumchanneling.channel.SetDeviceChannelPacket;
 import com.quantumchanneling.channel.SetDevicePriorityPacket;
 import com.quantumchanneling.channel.SetDeviceSurgePacket;
 import com.quantumchanneling.channel.SetDeviceThroughputPacket;
+import com.quantumchanneling.channel.SetFluidEnabledPacket;
+import com.quantumchanneling.channel.SetGasEnabledPacket;
+import com.quantumchanneling.channel.SetHeatEnabledPacket;
+import com.quantumchanneling.channel.SetFluidSubchannelFilterModePacket;
 import com.quantumchanneling.channel.SetItemEnabledPacket;
 import com.quantumchanneling.channel.SetSubchannelFilterModePacket;
 import com.quantumchanneling.channel.SubscribeChargingPacket;
+import com.quantumchanneling.channel.SubscribeDeviceFluidPacket;
 import com.quantumchanneling.channel.SubscribeDevicePacket;
+import com.quantumchanneling.channel.FluidFilter;
+import com.quantumchanneling.channel.FluidSubchannel;
+import net.minecraftforge.fluids.FluidStack;
 import com.quantumchanneling.channel.ToggleChunkLoadPacket;
 import com.quantumchanneling.channel.TransferChannelOwnerPacket;
 import net.minecraft.resources.ResourceLocation;
@@ -119,23 +134,40 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         public NodeSort next() { NodeSort[] v = values(); return v[(ordinal() + 1) % v.length]; }
     }
 
-    /** Resource the side-tab strip configures the channel for. Only ENERGY is implemented. */
+    /**
+     * Side-tab strip on the right edge of the GUI. Each tab picks which configuration panel is
+     * shown — devices always handle every resource simultaneously (all-in-one), the strip only
+     * switches the user's view. ENERGY and ITEMS are fully implemented; FLUIDS is implemented as a
+     * clone of ITEMS using vanilla {@link net.minecraftforge.fluids.capability.IFluidHandler};
+     * GASES + HEAT are Mekanism-dependent and currently render explainer panels.
+     */
     public enum ResourceMode {
-        ENERGY("⚡", 0xFFFFD080, "gui.quantumchanneling.resource.energy"),   // ⚡ lightning
-        ITEMS ("◆", 0xFFA0C0A0, "gui.quantumchanneling.resource.items"),    // ◆ gem
-        FLUIDS("≈", 0xFF80C0FF, "gui.quantumchanneling.resource.fluids"),   // ≈ waves
-        GASES ("☁", 0xFFC080FF, "gui.quantumchanneling.resource.gases");    // ☁ cloud
+        // HEAT is currently hidden — see #visible. The enum value is kept so existing channels
+        // with a HeatConfig in NBT continue to round-trip without a save migration; the routing
+        // engine and tick are both no-ops.
+        ENERGY("⚡", 0xFFFFD080, "gui.quantumchanneling.resource.energy", true),
+        ITEMS ("◆", 0xFFA0C0A0, "gui.quantumchanneling.resource.items",  true),
+        FLUIDS("≈", 0xFF80C0FF, "gui.quantumchanneling.resource.fluids", true),
+        GASES ("☁", 0xFFC080FF, "gui.quantumchanneling.resource.gases",  true),
+        HEAT  ("✺", 0xFFFF8050, "gui.quantumchanneling.resource.heat",   false);
         public final String label;
         public final int color;
         public final String labelKey;
-        ResourceMode(String label, int color, String labelKey) {
-            this.label = label; this.color = color; this.labelKey = labelKey;
+        /** Whether this mode renders in the side-tab strip and accepts clicks. */
+        public final boolean visible;
+        ResourceMode(String label, int color, String labelKey, boolean visible) {
+            this.label = label; this.color = color; this.labelKey = labelKey; this.visible = visible;
         }
     }
 
     private Tab activeTab = Tab.STATUS;
     private ChannelSort channelSort = ChannelSort.NAME;
     private NodeSort nodeSort = NodeSort.POSITION;
+    /**
+     * The active side-mode panel. Always a {@link ResourceMode#visible} entry — if a hidden mode
+     * is ever assigned (e.g. via {@link #switchTab} legacy state), the side-tab click handler
+     * snaps it back to ENERGY before the next frame renders.
+     */
     private ResourceMode activeMode = ResourceMode.ENERGY;
     /** Stats tab window: 1, 5, or 10 minutes. Drives which graph slot range the bars read from. */
     private int statsWindow = 1;
@@ -188,6 +220,16 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     private boolean editingVoid = false;
     /** "New subchannel name" text input. */
     private @Nullable EditBox itemsNewSubInput;
+
+    // ---- Fluids panel state (parallel to items) ----
+    private @Nullable UUID selectedFluidSubchannelId;
+    private boolean editingFluidVoid = false;
+    private @Nullable EditBox fluidsNewSubInput;
+
+    // ---- Gas panel state (parallel to fluids) ----
+    private @Nullable UUID selectedGasSubchannelId;
+    private boolean editingGasVoid = false;
+    private @Nullable EditBox gasesNewSubInput;
 
     /** When true, the channel-info side panel (anchored to the left edge) is showing. */
     private boolean channelInfoOpen = false;
@@ -290,7 +332,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         switch (activeMode) {
             case ENERGY -> buildChargeTab();
             case ITEMS  -> buildItemsPanel();
-            case FLUIDS, GASES -> { /* no widgets — renderChargeOrFilters draws a coming-soon panel */ }
+            case FLUIDS -> buildFluidsPanel();
+            case GASES  -> buildGasPanel();
+            case HEAT   -> buildHeatPanel();
         }
     }
 
@@ -790,23 +834,54 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     private void renderSideTabs(GuiGraphics gfx, int mouseX, int mouseY) {
         ResourceMode[] modes = ResourceMode.values();
         int startY = topPos + CONTENT_TOP;
+        int slot = 0;
         for (int i = 0; i < modes.length; i++) {
             ResourceMode m = modes[i];
+            if (!m.visible) continue;
             int x = leftPos + BG_W;
-            int y = startY + i * (SIDE_TAB_H + SIDE_TAB_GAP);
+            int y = startY + slot * (SIDE_TAB_H + SIDE_TAB_GAP);
+            slot++;
             boolean active = m == activeMode;
             boolean hover = mouseX >= x && mouseX < x + SIDE_TAB_W && mouseY >= y && mouseY < y + SIDE_TAB_H;
+            boolean locked = isModeLocked(m);
 
-            // Accent border (per-mode color), then body fill. Active is brighter.
-            gfx.fill(x - 1, y - 1, x + SIDE_TAB_W + 1, y + SIDE_TAB_H + 1, m.color);
-            int body = active ? 0xFF1A1F2A : (hover ? 0xFF18202E : 0xFF0B0E14);
+            // Border. Locked tabs dim the accent to a dark grey so they read as "disabled" instead
+            // of the channel-color border the other tabs use.
+            int borderColor = locked ? 0xFF3A3F48 : m.color;
+            gfx.fill(x - 1, y - 1, x + SIDE_TAB_W + 1, y + SIDE_TAB_H + 1, borderColor);
+            int body;
+            if (locked) {
+                body = hover ? 0xFF14181F : 0xFF0A0D12;
+            } else {
+                body = active ? 0xFF1A1F2A : (hover ? 0xFF18202E : 0xFF0B0E14);
+            }
             gfx.fill(x, y, x + SIDE_TAB_W, y + SIDE_TAB_H, body);
 
-            // Two-letter code centered.
+            // Glyph. Locked tabs use a muted grey to make the unavailable state obvious; hovering
+            // a locked tab brightens slightly so the user knows it IS interactive (the click opens
+            // the placeholder panel explaining what's needed to unlock it).
+            int textColor;
+            if (locked) {
+                textColor = hover ? 0xFF8A929C : 0xFF606870;
+            } else {
+                textColor = active ? m.color : 0xFFC0C8D0;
+            }
             int labelW = font.width(m.label);
-            int textColor = active ? m.color : 0xFFC0C8D0;
             gfx.drawString(font, m.label, x + (SIDE_TAB_W - labelW) / 2, y + 10, textColor, false);
         }
+    }
+
+    /**
+     * A side-mode is "locked" when the mod that provides its underlying capability isn't loaded.
+     * Locked modes still render and switch (so the user can see the placeholder explaining what
+     * to install), but they get a muted appearance so they read as unavailable at a glance.
+     */
+    private static boolean isModeLocked(ResourceMode m) {
+        return switch (m) {
+            case ENERGY, ITEMS, FLUIDS -> false;
+            case GASES -> !Compat.gasProviderLoaded();
+            case HEAT  -> !Compat.heatProviderLoaded();
+        };
     }
 
     /* -------- Confirmation modal (e.g. ownership transfer) -------- */
@@ -897,11 +972,15 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         ResourceMode[] modes = ResourceMode.values();
         int startY = topPos + CONTENT_TOP;
         int x = leftPos + BG_W;
+        int slot = 0;
         for (int i = 0; i < modes.length; i++) {
-            int y = startY + i * (SIDE_TAB_H + SIDE_TAB_GAP);
+            ResourceMode m = modes[i];
+            if (!m.visible) continue;
+            int y = startY + slot * (SIDE_TAB_H + SIDE_TAB_GAP);
+            slot++;
             if (mx >= x && mx < x + SIDE_TAB_W && my >= y && my < y + SIDE_TAB_H) {
-                if (activeMode != modes[i]) {
-                    activeMode = modes[i];
+                if (activeMode != m) {
+                    activeMode = m;
                     rebuildAll();
                 }
                 return true;
@@ -916,8 +995,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
      * tab in a side-mode that isn't implemented yet (fluids / gases).
      */
     private boolean overlayBlocking() {
-        return activeTab == Tab.CHARGE
-                && (activeMode == ResourceMode.FLUIDS || activeMode == ResourceMode.GASES);
+        // All five modes now have real panels (gas/heat panels render a "Mekanism required"
+        // message instead when no provider is present, but they accept clicks fine).
+        return false;
     }
 
     /* -------- Channel info side panel (left edge tab) -------- */
@@ -1025,7 +1105,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         cy = switch (activeMode) {
             case ENERGY -> renderEnergyInfoSections(gfx, contentX, cy);
             case ITEMS  -> renderItemsInfoSections(gfx, contentX, cy);
-            case FLUIDS, GASES -> renderComingSoonInfoSection(gfx, contentX, cy);
+            case FLUIDS, GASES, HEAT -> renderComingSoonInfoSection(gfx, contentX, cy);
         };
 
         gfx.disableScissor();
@@ -1127,9 +1207,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.items_header")
                 .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
         cy += 12;
-        String state = cfg.isEnabled() ? "§aON" : "§7OFF";
-        cy = drawChInfoFormatted(gfx, contentX + 4, cy,
-                "gui.quantumchanneling.channel.info.items_state_fmt", state);
+        // Channel-level Routing: ON/OFF removed — items participation is now per-device. The
+        // subchannel list below is the channel-scoped view that's still meaningful.
 
         cy += 4;
         gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.subchannels_header")
@@ -1180,15 +1259,28 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return cy;
     }
 
-    /** Fluids / gases placeholder — keep the panel feeling consistent across modes. */
+    /** Fluids / gases / heat side-panel placeholder. Locked variant calls out the missing mod. */
     private int renderComingSoonInfoSection(GuiGraphics gfx, int contentX, int cy) {
+        boolean locked = isModeLocked(activeMode);
         cy += 4;
+        String suffixKey = locked
+                ? "gui.quantumchanneling.resource.locked_title"
+                : "gui.quantumchanneling.resource.coming_soon_title";
         gfx.drawString(font, Component.translatable(activeMode.labelKey)
                         .copy().append(" — ")
-                        .append(Component.translatable("gui.quantumchanneling.resource.coming_soon_title"))
-                        .withStyle(ChatFormatting.GRAY),
-                contentX, cy, 0xFF888888, false);
+                        .append(Component.translatable(suffixKey))
+                        .withStyle(locked ? ChatFormatting.RED : ChatFormatting.GRAY),
+                contentX, cy, locked ? 0xFFE08080 : 0xFF888888, false);
         cy += 11;
+        if (locked) {
+            String bodyKey = "gui.quantumchanneling.resource." + activeMode.name().toLowerCase() + ".locked_body";
+            var lines = font.split(Component.translatable(bodyKey)
+                    .withStyle(ChatFormatting.GRAY), CHANNEL_PANEL_W - 18);
+            for (var line : lines) {
+                gfx.drawString(font, line, contentX, cy, 0xFFAAAAAA, false);
+                cy += 10;
+            }
+        }
         return cy;
     }
 
@@ -1251,31 +1343,56 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         switch (activeMode) {
             case ENERGY -> renderCharge(gfx);
             case ITEMS  -> renderItemsPanel(gfx, mouseX, mouseY);
-            case FLUIDS, GASES -> renderFiltersComingSoon(gfx);
+            case FLUIDS -> renderFluidsPanel(gfx, mouseX, mouseY);
+            case GASES  -> renderGasPanel(gfx);
+            case HEAT   -> renderHeatPanel(gfx);
         }
     }
 
-    /** Coming-soon splash drawn INSIDE the Charge/Filters tab content area for fluids/gases. */
+    /**
+     * Placeholder splash drawn INSIDE the Charge/Filters tab content area for fluids/gases/heat.
+     * Two states:
+     * <ul>
+     *   <li><b>Locked</b> — the mod that would provide this resource isn't loaded. The accent
+     *       turns red-orange and the body text names what to install to unlock the mode.</li>
+     *   <li><b>Coming soon</b> — provider IS loaded but the QC integration isn't shipped yet.
+     *       Accent stays in the mode's color and the body says it's on the roadmap.</li>
+     * </ul>
+     */
     private void renderFiltersComingSoon(GuiGraphics gfx) {
+        boolean locked = isModeLocked(activeMode);
+        int accent = locked ? 0xFFE05050 : activeMode.color;
         int x1 = leftPos + 6;
         int y1 = topPos + CONTENT_TOP + 2;
         int x2 = leftPos + BG_W - 6;
         int y2 = topPos + BG_H - 6;
         gfx.fill(x1, y1, x2, y2, 0xE6000000);
-        gfx.fill(x1, y1, x2, y1 + 1, activeMode.color);
-        gfx.fill(x1, y2 - 1, x2, y2, activeMode.color);
-        gfx.fill(x1, y1, x1 + 1, y2, activeMode.color);
-        gfx.fill(x2 - 1, y1, x2, y2, activeMode.color);
+        gfx.fill(x1, y1, x2, y1 + 1, accent);
+        gfx.fill(x1, y2 - 1, x2, y2, accent);
+        gfx.fill(x1, y1, x1 + 1, y2, accent);
+        gfx.fill(x2 - 1, y1, x2, y2, accent);
+
+        String suffixKey = locked
+                ? "gui.quantumchanneling.resource.locked_title"
+                : "gui.quantumchanneling.resource.coming_soon_title";
         Component title = Component.translatable(activeMode.labelKey)
                 .append(" — ")
-                .append(Component.translatable("gui.quantumchanneling.resource.coming_soon_title"));
+                .append(Component.translatable(suffixKey));
         int titleW = font.width(title);
-        gfx.drawString(font, title, leftPos + (BG_W - titleW) / 2, topPos + BG_H / 2 - 12,
-                activeMode.color, false);
-        Component body = Component.translatable("gui.quantumchanneling.resource.coming_soon_body");
-        int bodyW = font.width(body);
-        gfx.drawString(font, body, leftPos + (BG_W - bodyW) / 2, topPos + BG_H / 2 + 2,
-                0xFFC0C0C0, false);
+        gfx.drawString(font, title, leftPos + (BG_W - titleW) / 2, topPos + BG_H / 2 - 18,
+                accent, false);
+
+        String bodyKey = locked
+                ? "gui.quantumchanneling.resource." + activeMode.name().toLowerCase() + ".locked_body"
+                : "gui.quantumchanneling.resource.coming_soon_body";
+        Component body = Component.translatable(bodyKey);
+        var lines = font.split(body, BG_W - 40);
+        int y = topPos + BG_H / 2 - 2;
+        for (var line : lines) {
+            int w = font.width(line);
+            gfx.drawString(font, line, leftPos + (BG_W - w) / 2, y, 0xFFC0C0C0, false);
+            y += 11;
+        }
     }
 
     private void renderStatus(GuiGraphics gfx) {
@@ -2247,6 +2364,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         // workflow. No PhotonButton or EditBox shares the filter-slot region, so widgets won't miss
         // input by skipping super.
         if (handleItemsPanelClick(mx, my)) return true;
+        if (handleFluidsPanelClick(mx, my)) return true;
+        if (handleGasPanelClick(mx, my)) return true;
         Tab[] tabs = Tab.values();
         int tabW = (BG_W - 8) / tabs.length;
         int tabBarTop = topPos + TAB_BAR_Y + 1;
@@ -2532,17 +2651,15 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         ChannelInfo.MemberPos here = findThisDevice();
         boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
 
-        boolean enabled = currentChannel != null && currentChannel.itemConfig().isEnabled();
+        // Per-device participation flag — this toggles only the device whose GUI is open. Devices
+        // default to enabled; the button shows the current device's state via `here`.
+        boolean enabled = here != null && here.itemsEnabled();
         addRenderableWidget(PhotonButton.of(cx, topPos + CONTENT_TOP + 4, 100, 18,
                 Component.translatable(enabled
                         ? "gui.quantumchanneling.items.enabled"
                         : "gui.quantumchanneling.items.disabled"),
-                b -> {
-                    if (currentChannel != null) ModMessages.sendToServer(
-                            new SetItemEnabledPacket(currentChannel.id(), !enabled));
-                }, this::accentColor));
-
-        // No per-device resource-mode toggle — all-in-one: every device handles every resource.
+                b -> ModMessages.sendToServer(new SetItemEnabledPacket(menu.getBlockPos(), !enabled)),
+                this::accentColor));
 
         itemsNewSubInput = new EditBox(font, cx + 104, topPos + CONTENT_TOP + 5,
                 rw - 104 - 44, 16, Component.literal(""));
@@ -2895,5 +3012,748 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                 currentChannel.id(), selectedSubchannelId, !cur.isWhitelist()));
     }
 
+    /* ===================== Fluids panel (clone of items, vanilla IFluidHandler) ===================== */
+
+    /** True when the fluid filter slot grid is currently the visible panel. */
+    public boolean isFluidsModeActive() {
+        return activeTab == Tab.CHARGE && activeMode == ResourceMode.FLUIDS && currentChannel != null;
+    }
+
+    private @Nullable FluidFilter resolveCurrentFluidFilter() {
+        if (currentChannel == null) return null;
+        if (editingFluidVoid) {
+            ChannelInfo.MemberPos here = findThisDevice();
+            if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) return here.fluidVoidFilter();
+            return null;
+        }
+        if (selectedFluidSubchannelId == null) return null;
+        FluidSubchannel sub = currentChannel.fluidConfig().subchannel(selectedFluidSubchannelId);
+        return sub == null ? null : sub.filter();
+    }
+
+    private Component currentEditingFluidLabel() {
+        if (currentChannel == null || (selectedFluidSubchannelId == null && !editingFluidVoid)) {
+            return Component.translatable("gui.quantumchanneling.items.no_subs");
+        }
+        if (editingFluidVoid) return Component.translatable("gui.quantumchanneling.items.editing_void");
+        FluidSubchannel sub = currentChannel.fluidConfig().subchannel(selectedFluidSubchannelId);
+        String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
+        return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
+    }
+
+    private @Nullable java.util.UUID firstFluidSubchannelId() {
+        if (currentChannel == null) return null;
+        var it = currentChannel.fluidConfig().subchannels().iterator();
+        return it.hasNext() ? it.next().id() : null;
+    }
+
+    private void ensureFluidSelectionValid() {
+        if (currentChannel == null) { selectedFluidSubchannelId = null; editingFluidVoid = false; return; }
+        if (editingFluidVoid) {
+            if (!isCurrentEmitter()) { editingFluidVoid = false; selectedFluidSubchannelId = firstFluidSubchannelId(); }
+            return;
+        }
+        if (selectedFluidSubchannelId != null
+                && currentChannel.fluidConfig().subchannel(selectedFluidSubchannelId) != null) return;
+        java.util.UUID first = firstFluidSubchannelId();
+        if (first != null) { selectedFluidSubchannelId = first; editingFluidVoid = false; }
+        else if (isCurrentEmitter()) { editingFluidVoid = true; selectedFluidSubchannelId = null; }
+        else { selectedFluidSubchannelId = null; editingFluidVoid = false; }
+    }
+
+    private void cycleFluidSelection(int direction) {
+        if (currentChannel == null) return;
+        boolean emitter = isCurrentEmitter();
+        java.util.List<Object> cycle = new java.util.ArrayList<>();
+        if (emitter) cycle.add("VOID");
+        for (FluidSubchannel s : currentChannel.fluidConfig().subchannels()) cycle.add(s.id());
+        if (cycle.isEmpty()) return;
+        int idx = -1;
+        if (editingFluidVoid) {
+            for (int i = 0; i < cycle.size(); i++) if ("VOID".equals(cycle.get(i))) { idx = i; break; }
+        } else if (selectedFluidSubchannelId != null) {
+            for (int i = 0; i < cycle.size(); i++) if (selectedFluidSubchannelId.equals(cycle.get(i))) { idx = i; break; }
+        }
+        if (idx < 0) idx = 0;
+        idx = ((idx + direction) % cycle.size() + cycle.size()) % cycle.size();
+        Object chosen = cycle.get(idx);
+        if ("VOID".equals(chosen)) { editingFluidVoid = true; selectedFluidSubchannelId = null; }
+        else { editingFluidVoid = false; selectedFluidSubchannelId = (java.util.UUID) chosen; }
+    }
+
+    private net.minecraft.resources.@Nullable ResourceLocation fluidFilterAtSlot(@Nullable FluidFilter f, int slotIdx) {
+        if (f == null) return null;
+        int i = 0;
+        for (net.minecraft.resources.ResourceLocation id : f.fluids()) { if (i == slotIdx) return id; i++; }
+        return null;
+    }
+
+    private void sendAddFluid(net.minecraft.resources.ResourceLocation id) {
+        if (currentChannel == null) return;
+        if (editingFluidVoid) {
+            ModMessages.sendToServer(new AddEmitterFluidVoidPacket(menu.getBlockPos(), id));
+        } else if (selectedFluidSubchannelId != null) {
+            ModMessages.sendToServer(new AddSubchannelFluidPacket(currentChannel.id(), selectedFluidSubchannelId, id));
+        }
+    }
+
+    private void sendRemoveFluid(net.minecraft.resources.ResourceLocation id) {
+        if (currentChannel == null) return;
+        if (editingFluidVoid) {
+            ModMessages.sendToServer(new RemoveEmitterFluidVoidPacket(menu.getBlockPos(), id));
+        } else if (selectedFluidSubchannelId != null) {
+            ModMessages.sendToServer(new RemoveSubchannelFluidPacket(currentChannel.id(), selectedFluidSubchannelId, id));
+        }
+    }
+
+    private void sendToggleFluidFilterMode() {
+        if (currentChannel == null || editingFluidVoid || selectedFluidSubchannelId == null) return;
+        FluidFilter cur = resolveCurrentFluidFilter();
+        if (cur == null) return;
+        ModMessages.sendToServer(new SetFluidSubchannelFilterModePacket(
+                currentChannel.id(), selectedFluidSubchannelId, !cur.isWhitelist()));
+    }
+
+    public int getFluidsSlotCount() { return ITEMS_SLOTS_VISIBLE; }
+
+    public @Nullable net.minecraft.client.renderer.Rect2i getFluidsSlotRect(int slotIdx) {
+        if (!isFluidsModeActive() || slotIdx < 0 || slotIdx >= ITEMS_SLOTS_VISIBLE) return null;
+        if (resolveCurrentFluidFilter() == null) return null;
+        int cx = leftPos + 8;
+        int rw = BG_W - 16;
+        int gridW = ITEMS_SLOT_COLS * ITEMS_SLOT_SIZE;
+        int gridX = cx + (rw - gridW) / 2;
+        int gridY = topPos + CONTENT_TOP + 80;
+        int col = slotIdx % ITEMS_SLOT_COLS;
+        int row = slotIdx / ITEMS_SLOT_COLS;
+        return new net.minecraft.client.renderer.Rect2i(
+                gridX + col * ITEMS_SLOT_SIZE,
+                gridY + row * ITEMS_SLOT_SIZE,
+                ITEMS_SLOT_SIZE, ITEMS_SLOT_SIZE);
+    }
+
+    public int getFluidsSlotAt(int x, int y) {
+        if (!isFluidsModeActive()) return -1;
+        for (int i = 0; i < ITEMS_SLOTS_VISIBLE; i++) {
+            var r = getFluidsSlotRect(i);
+            if (r != null && x >= r.getX() && x < r.getX() + r.getWidth()
+                    && y >= r.getY() && y < r.getY() + r.getHeight()) return i;
+        }
+        return -1;
+    }
+
+    private void buildFluidsPanel() {
+        int cx = leftPos + 8;
+        int rw = BG_W - 16;
+
+        ensureFluidSelectionValid();
+        ChannelInfo.MemberPos here = findThisDevice();
+        boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
+
+        // Per-device participation — toggles only this emitter/receiver.
+        boolean enabled = here != null && here.fluidsEnabled();
+        addRenderableWidget(PhotonButton.of(cx, topPos + CONTENT_TOP + 4, 100, 18,
+                Component.translatable(enabled
+                        ? "gui.quantumchanneling.fluids.enabled"
+                        : "gui.quantumchanneling.fluids.disabled"),
+                b -> ModMessages.sendToServer(new SetFluidEnabledPacket(menu.getBlockPos(), !enabled)),
+                this::accentColor));
+
+        fluidsNewSubInput = new EditBox(font, cx + 104, topPos + CONTENT_TOP + 5,
+                rw - 104 - 44, 16, Component.literal(""));
+        fluidsNewSubInput.setHint(Component.translatable("gui.quantumchanneling.items.new_sub_hint"));
+        fluidsNewSubInput.setMaxLength(32);
+        addRenderableWidget(fluidsNewSubInput);
+        addRenderableWidget(PhotonButton.of(cx + rw - 40, topPos + CONTENT_TOP + 4, 40, 18,
+                Component.translatable("gui.quantumchanneling.items.new_sub_btn"),
+                b -> {
+                    if (currentChannel == null) return;
+                    String name = fluidsNewSubInput != null ? fluidsNewSubInput.getValue().trim() : "";
+                    if (name.isEmpty()) name = "Sub " + (currentChannel.fluidConfig().subchannelCount() + 1);
+                    ModMessages.sendToServer(new CreateFluidSubchannelPacket(currentChannel.id(), name));
+                    if (fluidsNewSubInput != null) fluidsNewSubInput.setValue("");
+                }, this::accentColor));
+
+        int subCount = currentChannel == null ? 0 : currentChannel.fluidConfig().subchannelCount();
+        int cycleSize = subCount + (emitter ? 1 : 0);
+        if (cycleSize == 0) return;
+        boolean showArrows = cycleSize > 1;
+
+        int selY = topPos + CONTENT_TOP + 28;
+        int labelX = showArrows ? cx + 16 : cx;
+        int labelW = showArrows ? 130 : 162;
+        if (showArrows) {
+            addRenderableWidget(PhotonButton.of(cx, selY, 14, 18, Component.literal("◀"),
+                    b -> cycleFluidSelection(-1), this::accentColor));
+        }
+        addRenderableWidget(PhotonButton.of(labelX, selY, labelW, 18, currentEditingFluidLabel(),
+                b -> cycleFluidSelection(+1), this::accentColor));
+        if (showArrows) {
+            addRenderableWidget(PhotonButton.of(cx + 148, selY, 14, 18, Component.literal("▶"),
+                    b -> cycleFluidSelection(+1), this::accentColor));
+        }
+
+        FluidFilter cur = resolveCurrentFluidFilter();
+        if (cur != null && !editingFluidVoid) {
+            addRenderableWidget(PhotonButton.of(cx + 166, selY, 70, 18,
+                    Component.translatable(cur.isWhitelist()
+                            ? "gui.quantumchanneling.items.filter_whitelist"
+                            : "gui.quantumchanneling.items.filter_blacklist"),
+                    b -> sendToggleFluidFilterMode(), this::accentColor));
+        }
+
+        if (selectedFluidSubchannelId != null && !editingFluidVoid && here != null) {
+            boolean subbed = here.subscribedFluidSubchannels().contains(selectedFluidSubchannelId);
+            java.util.UUID subId = selectedFluidSubchannelId;
+            addRenderableWidget(PhotonButton.of(cx + 240, selY, 60, 18,
+                    Component.translatable(subbed
+                            ? "gui.quantumchanneling.items.unsubscribe"
+                            : "gui.quantumchanneling.items.subscribe"),
+                    b -> ModMessages.sendToServer(new SubscribeDeviceFluidPacket(menu.getBlockPos(), subId, !subbed)),
+                    this::accentColor));
+        }
+
+        if (selectedFluidSubchannelId != null && !editingFluidVoid && currentChannel != null) {
+            java.util.UUID subId = selectedFluidSubchannelId;
+            addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
+                    Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
+                    b -> ModMessages.sendToServer(new DeleteFluidSubchannelPacket(currentChannel.id(), subId))));
+            if (emitter && here != null) {
+                java.util.List<java.util.UUID> mySubs = here.subscribedFluidSubchannels();
+                int myIdx = mySubs.indexOf(subId);
+                int total = mySubs.size();
+                if (myIdx >= 0 && total >= 2) {
+                    boolean canUp = myIdx > 0;
+                    boolean canDown = myIdx < total - 1;
+                    PhotonButton up = PhotonButton.of(cx, topPos + CONTENT_TOP + 160, 56, 18,
+                            Component.translatable("gui.quantumchanneling.items.priority_up"),
+                            b -> ModMessages.sendToServer(new MoveDeviceFluidSubchannelPacket(menu.getBlockPos(), subId, -1)),
+                            this::accentColor);
+                    up.active = canUp;
+                    addRenderableWidget(up);
+                    PhotonButton down = PhotonButton.of(cx + 60, topPos + CONTENT_TOP + 160, 56, 18,
+                            Component.translatable("gui.quantumchanneling.items.priority_down"),
+                            b -> ModMessages.sendToServer(new MoveDeviceFluidSubchannelPacket(menu.getBlockPos(), subId, +1)),
+                            this::accentColor);
+                    down.active = canDown;
+                    addRenderableWidget(down);
+                }
+            }
+        }
+    }
+
+    private void renderFluidsPanel(GuiGraphics gfx, int mouseX, int mouseY) {
+        int cx = leftPos + 8;
+        int rw = BG_W - 16;
+        int accent = accentColor();
+
+        if (currentChannel == null) {
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.unbound")
+                    .withStyle(ChatFormatting.GRAY), cx, topPos + CONTENT_TOP + 4, 0xAAAAAA, false);
+            return;
+        }
+
+        ChannelInfo.MemberPos here = findThisDevice();
+        boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
+        int subCount = currentChannel.fluidConfig().subchannelCount();
+        int cycleSize = subCount + (emitter ? 1 : 0);
+        if (cycleSize == 0) {
+            Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
+                    .withStyle(ChatFormatting.GRAY);
+            var lines = font.split(msg, rw - 16);
+            int y = topPos + CONTENT_TOP + 60;
+            for (var line : lines) {
+                int w = font.width(line);
+                gfx.drawString(font, line, leftPos + (BG_W - w) / 2, y, 0xFF888888, false);
+                y += 11;
+            }
+            return;
+        }
+
+        FluidFilter f = resolveCurrentFluidFilter();
+        FluidStack hoveredFluid = null;
+        if (f != null) {
+            for (int i = 0; i < ITEMS_SLOTS_VISIBLE; i++) {
+                var r = getFluidsSlotRect(i);
+                if (r == null) continue;
+                int sx = r.getX(), sy = r.getY();
+                net.minecraft.resources.ResourceLocation id = fluidFilterAtSlot(f, i);
+                boolean hover = mouseX >= sx && mouseX < sx + ITEMS_SLOT_SIZE && mouseY >= sy && mouseY < sy + ITEMS_SLOT_SIZE;
+                int border = hover ? accent : blendARGB(accent, 0xFF000000, 0.6f);
+                int inner = hover ? 0xFF1A2030 : 0xFF0C1018;
+                gfx.fill(sx, sy, sx + ITEMS_SLOT_SIZE, sy + ITEMS_SLOT_SIZE, border);
+                gfx.fill(sx + 1, sy + 1, sx + ITEMS_SLOT_SIZE - 1, sy + ITEMS_SLOT_SIZE - 1, inner);
+                if (id != null) {
+                    net.minecraft.world.level.material.Fluid fluid = net.minecraft.core.registries.BuiltInRegistries.FLUID.get(id);
+                    if (fluid != null && fluid != net.minecraft.world.level.material.Fluids.EMPTY) {
+                        // Render the bucket icon if the fluid provides one — otherwise paint a flat
+                        // tile in the fluid's tint color as a fallback for moditemless fluids.
+                        net.minecraft.world.item.ItemStack bucket = new net.minecraft.world.item.ItemStack(fluid.getBucket());
+                        if (!bucket.isEmpty()) {
+                            gfx.renderItem(bucket, sx + 1, sy + 1);
+                            if (hover) hoveredFluid = new FluidStack(fluid, 1000);
+                        } else {
+                            int tint = net.minecraftforge.client.extensions.common.IClientFluidTypeExtensions.of(fluid).getTintColor();
+                            if ((tint & 0xFF000000) == 0) tint |= 0xFF000000;
+                            gfx.fill(sx + 2, sy + 2, sx + ITEMS_SLOT_SIZE - 2, sy + ITEMS_SLOT_SIZE - 2, tint);
+                            if (hover) hoveredFluid = new FluidStack(fluid, 1000);
+                        }
+                    }
+                }
+            }
+            if (hoveredFluid != null) {
+                gfx.renderTooltip(font, hoveredFluid.getDisplayName(), mouseX, mouseY);
+            }
+        }
+
+        // Priority header row for emitters with multiple subscriptions.
+        if (emitter && here != null && !editingFluidVoid && selectedFluidSubchannelId != null) {
+            java.util.List<java.util.UUID> mySubs = here.subscribedFluidSubchannels();
+            int myIdx = mySubs.indexOf(selectedFluidSubchannelId);
+            if (myIdx >= 0 && mySubs.size() >= 2) {
+                gfx.drawString(font, Component.translatable(
+                                "gui.quantumchanneling.items.priority_header", myIdx + 1, mySubs.size())
+                                .withStyle(ChatFormatting.GRAY),
+                        cx, topPos + CONTENT_TOP + 148, 0xFFB0B8C8, false);
+            }
+        }
+
+        int n = currentChannel.fluidConfig().subchannelCount();
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.fluids.sub_count", n),
+                cx, topPos + BG_H - 18, 0xFFB0B8C8, false);
+    }
+
+    private boolean handleFluidsPanelClick(double mx, double my) {
+        if (!isFluidsModeActive() || currentChannel == null) return false;
+        int slot = getFluidsSlotAt((int) mx, (int) my);
+        if (slot >= 0) {
+            // Cursor-holds-fluid-bucket path: capture the fluid id from the held bucket and add it
+            // to the filter without consuming the cursor stack. Useful for users who pick up a
+            // bucket from their inventory dock and click a filter slot.
+            net.minecraft.world.item.ItemStack carried = menu.getCarried();
+            if (!carried.isEmpty()) {
+                net.minecraft.world.level.material.Fluid fluid = carriedFluidOf(carried);
+                if (fluid != null && fluid != net.minecraft.world.level.material.Fluids.EMPTY) {
+                    net.minecraft.resources.ResourceLocation id = net.minecraft.core.registries.BuiltInRegistries.FLUID.getKey(fluid);
+                    if (id != null) sendAddFluid(id);
+                    return true;
+                }
+            }
+            // Empty cursor on populated slot → remove the entry.
+            FluidFilter f = resolveCurrentFluidFilter();
+            net.minecraft.resources.@Nullable ResourceLocation id = fluidFilterAtSlot(f, slot);
+            if (id != null) sendRemoveFluid(id);
+            return true;
+        }
+        return false;
+    }
+
+    /** Reads the fluid embedded in a carried ItemStack (filled bucket, fluid-container item, etc.). */
+    private static net.minecraft.world.level.material.@Nullable Fluid carriedFluidOf(net.minecraft.world.item.ItemStack stack) {
+        if (stack.isEmpty()) return null;
+        // Filled buckets are the common case — BucketItem exposes its Fluid directly.
+        if (stack.getItem() instanceof net.minecraft.world.item.BucketItem bucket) {
+            return bucket.getFluid();
+        }
+        // Generic fluid-container items expose IFluidHandlerItem.
+        var cap = stack.getCapability(net.minecraftforge.common.capabilities.ForgeCapabilities.FLUID_HANDLER_ITEM).orElse(null);
+        if (cap != null && cap.getTanks() > 0) {
+            FluidStack fs = cap.getFluidInTank(0);
+            if (!fs.isEmpty()) return fs.getFluid();
+        }
+        return null;
+    }
+
+    /** Public ghost-drop entry point used by the JEI/EMI handlers (parity with acceptDroppedFilterItem). */
+    public void acceptDroppedFilterFluid(net.minecraft.resources.ResourceLocation id, int slotIdx) {
+        if (currentChannel == null || !isFluidsModeActive() || id == null) return;
+        FluidFilter f = resolveCurrentFluidFilter();
+        if (f == null) return;
+        net.minecraft.resources.ResourceLocation existing = fluidFilterAtSlot(f, slotIdx);
+        if (existing != null && existing.equals(id)) return;
+        if (existing != null) sendRemoveFluid(existing);
+        sendAddFluid(id);
+    }
+
+    /* ===================== Gas + Heat panels (Mekanism, single-bus v1) ===================== */
+
+    /* --- Gas panel: full subchannel UI mirroring fluids. --- */
+
+    public boolean isGasModeActive() {
+        return activeTab == Tab.CHARGE && activeMode == ResourceMode.GASES && currentChannel != null;
+    }
+
+    private @Nullable com.quantumchanneling.channel.GasFilter resolveCurrentGasFilter() {
+        if (currentChannel == null) return null;
+        if (editingGasVoid) {
+            ChannelInfo.MemberPos here = findThisDevice();
+            if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) return here.gasVoidFilter();
+            return null;
+        }
+        if (selectedGasSubchannelId == null) return null;
+        var sub = currentChannel.gasConfig().subchannel(selectedGasSubchannelId);
+        return sub == null ? null : sub.filter();
+    }
+
+    private Component currentEditingGasLabel() {
+        if (currentChannel == null || (selectedGasSubchannelId == null && !editingGasVoid)) {
+            return Component.translatable("gui.quantumchanneling.items.no_subs");
+        }
+        if (editingGasVoid) return Component.translatable("gui.quantumchanneling.items.editing_void");
+        var sub = currentChannel.gasConfig().subchannel(selectedGasSubchannelId);
+        String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
+        return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
+    }
+
+    private @Nullable java.util.UUID firstGasSubchannelId() {
+        if (currentChannel == null) return null;
+        var it = currentChannel.gasConfig().subchannels().iterator();
+        return it.hasNext() ? it.next().id() : null;
+    }
+
+    private void ensureGasSelectionValid() {
+        if (currentChannel == null) { selectedGasSubchannelId = null; editingGasVoid = false; return; }
+        if (editingGasVoid) {
+            if (!isCurrentEmitter()) { editingGasVoid = false; selectedGasSubchannelId = firstGasSubchannelId(); }
+            return;
+        }
+        if (selectedGasSubchannelId != null
+                && currentChannel.gasConfig().subchannel(selectedGasSubchannelId) != null) return;
+        java.util.UUID first = firstGasSubchannelId();
+        if (first != null) { selectedGasSubchannelId = first; editingGasVoid = false; }
+        else if (isCurrentEmitter()) { editingGasVoid = true; selectedGasSubchannelId = null; }
+        else { selectedGasSubchannelId = null; editingGasVoid = false; }
+    }
+
+    private void cycleGasSelection(int direction) {
+        if (currentChannel == null) return;
+        boolean emitter = isCurrentEmitter();
+        java.util.List<Object> cycle = new java.util.ArrayList<>();
+        if (emitter) cycle.add("VOID");
+        for (var s : currentChannel.gasConfig().subchannels()) cycle.add(s.id());
+        if (cycle.isEmpty()) return;
+        int idx = -1;
+        if (editingGasVoid) {
+            for (int i = 0; i < cycle.size(); i++) if ("VOID".equals(cycle.get(i))) { idx = i; break; }
+        } else if (selectedGasSubchannelId != null) {
+            for (int i = 0; i < cycle.size(); i++) if (selectedGasSubchannelId.equals(cycle.get(i))) { idx = i; break; }
+        }
+        if (idx < 0) idx = 0;
+        idx = ((idx + direction) % cycle.size() + cycle.size()) % cycle.size();
+        Object chosen = cycle.get(idx);
+        if ("VOID".equals(chosen)) { editingGasVoid = true; selectedGasSubchannelId = null; }
+        else { editingGasVoid = false; selectedGasSubchannelId = (java.util.UUID) chosen; }
+    }
+
+    private net.minecraft.resources.@Nullable ResourceLocation gasFilterAtSlot(@Nullable com.quantumchanneling.channel.GasFilter f, int slotIdx) {
+        if (f == null) return null;
+        int i = 0;
+        for (net.minecraft.resources.ResourceLocation id : f.gases()) { if (i == slotIdx) return id; i++; }
+        return null;
+    }
+
+    private void sendAddGas(net.minecraft.resources.ResourceLocation id) {
+        if (currentChannel == null) return;
+        if (editingGasVoid) {
+            ModMessages.sendToServer(new com.quantumchanneling.channel.AddEmitterGasVoidPacket(menu.getBlockPos(), id));
+        } else if (selectedGasSubchannelId != null) {
+            ModMessages.sendToServer(new com.quantumchanneling.channel.AddSubchannelGasPacket(
+                    currentChannel.id(), selectedGasSubchannelId, id));
+        }
+    }
+    private void sendRemoveGas(net.minecraft.resources.ResourceLocation id) {
+        if (currentChannel == null) return;
+        if (editingGasVoid) {
+            ModMessages.sendToServer(new com.quantumchanneling.channel.RemoveEmitterGasVoidPacket(menu.getBlockPos(), id));
+        } else if (selectedGasSubchannelId != null) {
+            ModMessages.sendToServer(new com.quantumchanneling.channel.RemoveSubchannelGasPacket(
+                    currentChannel.id(), selectedGasSubchannelId, id));
+        }
+    }
+    private void sendToggleGasFilterMode() {
+        if (currentChannel == null || editingGasVoid || selectedGasSubchannelId == null) return;
+        var cur = resolveCurrentGasFilter();
+        if (cur == null) return;
+        ModMessages.sendToServer(new com.quantumchanneling.channel.SetGasSubchannelFilterModePacket(
+                currentChannel.id(), selectedGasSubchannelId, !cur.isWhitelist()));
+    }
+
+    public int getGasesSlotCount() { return ITEMS_SLOTS_VISIBLE; }
+
+    public @Nullable net.minecraft.client.renderer.Rect2i getGasesSlotRect(int slotIdx) {
+        if (!isGasModeActive() || slotIdx < 0 || slotIdx >= ITEMS_SLOTS_VISIBLE) return null;
+        if (resolveCurrentGasFilter() == null) return null;
+        int cx = leftPos + 8;
+        int rw = BG_W - 16;
+        int gridW = ITEMS_SLOT_COLS * ITEMS_SLOT_SIZE;
+        int gridX = cx + (rw - gridW) / 2;
+        int gridY = topPos + CONTENT_TOP + 80;
+        int col = slotIdx % ITEMS_SLOT_COLS;
+        int row = slotIdx / ITEMS_SLOT_COLS;
+        return new net.minecraft.client.renderer.Rect2i(
+                gridX + col * ITEMS_SLOT_SIZE,
+                gridY + row * ITEMS_SLOT_SIZE,
+                ITEMS_SLOT_SIZE, ITEMS_SLOT_SIZE);
+    }
+
+    public int getGasesSlotAt(int x, int y) {
+        if (!isGasModeActive()) return -1;
+        for (int i = 0; i < ITEMS_SLOTS_VISIBLE; i++) {
+            var r = getGasesSlotRect(i);
+            if (r != null && x >= r.getX() && x < r.getX() + r.getWidth()
+                    && y >= r.getY() && y < r.getY() + r.getHeight()) return i;
+        }
+        return -1;
+    }
+
+    public void acceptDroppedFilterGas(net.minecraft.resources.ResourceLocation id, int slotIdx) {
+        if (currentChannel == null || !isGasModeActive() || id == null) return;
+        var f = resolveCurrentGasFilter();
+        if (f == null) return;
+        net.minecraft.resources.ResourceLocation existing = gasFilterAtSlot(f, slotIdx);
+        if (existing != null && existing.equals(id)) return;
+        if (existing != null) sendRemoveGas(existing);
+        sendAddGas(id);
+    }
+
+    private void buildGasPanel() {
+        int cx = leftPos + 8;
+        int rw = BG_W - 16;
+        boolean providerLoaded = Compat.gasProviderLoaded();
+        if (currentChannel == null) return;
+
+        ensureGasSelectionValid();
+        ChannelInfo.MemberPos here = findThisDevice();
+        boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
+
+        // Per-device participation — toggles only this emitter/receiver.
+        boolean enabled = here != null && here.gasEnabled();
+        PhotonButton master = PhotonButton.of(cx, topPos + CONTENT_TOP + 4, 100, 18,
+                Component.translatable(enabled
+                        ? "gui.quantumchanneling.gas.enabled"
+                        : "gui.quantumchanneling.gas.disabled"),
+                b -> ModMessages.sendToServer(new SetGasEnabledPacket(menu.getBlockPos(), !enabled)),
+                this::accentColor);
+        master.active = providerLoaded;
+        addRenderableWidget(master);
+
+        gasesNewSubInput = new EditBox(font, cx + 104, topPos + CONTENT_TOP + 5,
+                rw - 104 - 44, 16, Component.literal(""));
+        gasesNewSubInput.setHint(Component.translatable("gui.quantumchanneling.items.new_sub_hint"));
+        gasesNewSubInput.setMaxLength(32);
+        addRenderableWidget(gasesNewSubInput);
+        addRenderableWidget(PhotonButton.of(cx + rw - 40, topPos + CONTENT_TOP + 4, 40, 18,
+                Component.translatable("gui.quantumchanneling.items.new_sub_btn"),
+                b -> {
+                    if (currentChannel == null) return;
+                    String name = gasesNewSubInput != null ? gasesNewSubInput.getValue().trim() : "";
+                    if (name.isEmpty()) name = "Sub " + (currentChannel.gasConfig().subchannelCount() + 1);
+                    ModMessages.sendToServer(new com.quantumchanneling.channel.CreateGasSubchannelPacket(currentChannel.id(), name));
+                    if (gasesNewSubInput != null) gasesNewSubInput.setValue("");
+                }, this::accentColor));
+
+        int subCount = currentChannel.gasConfig().subchannelCount();
+        int cycleSize = subCount + (emitter ? 1 : 0);
+        if (cycleSize == 0) return;
+        boolean showArrows = cycleSize > 1;
+
+        int selY = topPos + CONTENT_TOP + 28;
+        int labelX = showArrows ? cx + 16 : cx;
+        int labelW = showArrows ? 130 : 162;
+        if (showArrows) {
+            addRenderableWidget(PhotonButton.of(cx, selY, 14, 18, Component.literal("◀"),
+                    b -> cycleGasSelection(-1), this::accentColor));
+        }
+        addRenderableWidget(PhotonButton.of(labelX, selY, labelW, 18, currentEditingGasLabel(),
+                b -> cycleGasSelection(+1), this::accentColor));
+        if (showArrows) {
+            addRenderableWidget(PhotonButton.of(cx + 148, selY, 14, 18, Component.literal("▶"),
+                    b -> cycleGasSelection(+1), this::accentColor));
+        }
+
+        var cur = resolveCurrentGasFilter();
+        if (cur != null && !editingGasVoid) {
+            addRenderableWidget(PhotonButton.of(cx + 166, selY, 70, 18,
+                    Component.translatable(cur.isWhitelist()
+                            ? "gui.quantumchanneling.items.filter_whitelist"
+                            : "gui.quantumchanneling.items.filter_blacklist"),
+                    b -> sendToggleGasFilterMode(), this::accentColor));
+        }
+
+        if (selectedGasSubchannelId != null && !editingGasVoid && here != null) {
+            boolean subbed = here.subscribedGasSubchannels().contains(selectedGasSubchannelId);
+            java.util.UUID subId = selectedGasSubchannelId;
+            addRenderableWidget(PhotonButton.of(cx + 240, selY, 60, 18,
+                    Component.translatable(subbed
+                            ? "gui.quantumchanneling.items.unsubscribe"
+                            : "gui.quantumchanneling.items.subscribe"),
+                    b -> ModMessages.sendToServer(new com.quantumchanneling.channel.SubscribeDeviceGasPacket(menu.getBlockPos(), subId, !subbed)),
+                    this::accentColor));
+        }
+
+        if (selectedGasSubchannelId != null && !editingGasVoid && currentChannel != null) {
+            java.util.UUID subId = selectedGasSubchannelId;
+            addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
+                    Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
+                    b -> ModMessages.sendToServer(new com.quantumchanneling.channel.DeleteGasSubchannelPacket(currentChannel.id(), subId))));
+            if (emitter && here != null) {
+                java.util.List<java.util.UUID> mySubs = here.subscribedGasSubchannels();
+                int myIdx = mySubs.indexOf(subId);
+                int total = mySubs.size();
+                if (myIdx >= 0 && total >= 2) {
+                    PhotonButton up = PhotonButton.of(cx, topPos + CONTENT_TOP + 160, 56, 18,
+                            Component.translatable("gui.quantumchanneling.items.priority_up"),
+                            b -> ModMessages.sendToServer(new com.quantumchanneling.channel.MoveDeviceGasSubchannelPacket(menu.getBlockPos(), subId, -1)),
+                            this::accentColor);
+                    up.active = myIdx > 0; addRenderableWidget(up);
+                    PhotonButton down = PhotonButton.of(cx + 60, topPos + CONTENT_TOP + 160, 56, 18,
+                            Component.translatable("gui.quantumchanneling.items.priority_down"),
+                            b -> ModMessages.sendToServer(new com.quantumchanneling.channel.MoveDeviceGasSubchannelPacket(menu.getBlockPos(), subId, +1)),
+                            this::accentColor);
+                    down.active = myIdx < total - 1; addRenderableWidget(down);
+                }
+            }
+        }
+    }
+
+    private void renderGasPanel(GuiGraphics gfx) {
+        int cx = leftPos + 8;
+        int rw = BG_W - 16;
+        int accent = accentColor();
+        if (currentChannel == null) {
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.unbound")
+                    .withStyle(ChatFormatting.GRAY), cx, topPos + CONTENT_TOP + 4, 0xAAAAAA, false);
+            return;
+        }
+        boolean providerLoaded = Compat.gasProviderLoaded();
+        if (!providerLoaded) {
+            var lines = font.split(Component.translatable("gui.quantumchanneling.resource.gases.locked_body")
+                    .withStyle(ChatFormatting.RED), rw - 8);
+            int y = topPos + CONTENT_TOP + 36;
+            for (var line : lines) {
+                gfx.drawString(font, line, cx, y, 0xFFE08080, false);
+                y += 11;
+            }
+            return;
+        }
+
+        ChannelInfo.MemberPos here = findThisDevice();
+        boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
+        int subCount = currentChannel.gasConfig().subchannelCount();
+        int cycleSize = subCount + (emitter ? 1 : 0);
+        if (cycleSize == 0) {
+            Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
+                    .withStyle(ChatFormatting.GRAY);
+            var lines = font.split(msg, rw - 16);
+            int y = topPos + CONTENT_TOP + 60;
+            for (var line : lines) {
+                int w = font.width(line);
+                gfx.drawString(font, line, leftPos + (BG_W - w) / 2, y, 0xFF888888, false);
+                y += 11;
+            }
+            return;
+        }
+
+        var f = resolveCurrentGasFilter();
+        if (f != null) {
+            for (int i = 0; i < ITEMS_SLOTS_VISIBLE; i++) {
+                var r = getGasesSlotRect(i);
+                if (r == null) continue;
+                int sx = r.getX(), sy = r.getY();
+                net.minecraft.resources.ResourceLocation id = gasFilterAtSlot(f, i);
+                boolean hover = mouseInside(sx, sy, gfx);
+                int border = blendARGB(accent, 0xFF000000, 0.6f);
+                int inner = 0xFF0C1018;
+                gfx.fill(sx, sy, sx + ITEMS_SLOT_SIZE, sy + ITEMS_SLOT_SIZE, border);
+                gfx.fill(sx + 1, sy + 1, sx + ITEMS_SLOT_SIZE - 1, sy + ITEMS_SLOT_SIZE - 1, inner);
+                if (id != null) {
+                    // Render the gas id as a 3-character chip label inside the slot — the actual
+                    // gas icon would need Mekanism's client API. Hover tooltip shows the full id.
+                    String chip = id.getPath().length() <= 4 ? id.getPath() : id.getPath().substring(0, 4);
+                    gfx.drawString(font, chip, sx + 2, sy + 5, 0xFFD8E0F0, false);
+                }
+            }
+        }
+
+        if (emitter && here != null && !editingGasVoid && selectedGasSubchannelId != null) {
+            java.util.List<java.util.UUID> mySubs = here.subscribedGasSubchannels();
+            int myIdx = mySubs.indexOf(selectedGasSubchannelId);
+            if (myIdx >= 0 && mySubs.size() >= 2) {
+                gfx.drawString(font, Component.translatable(
+                                "gui.quantumchanneling.items.priority_header", myIdx + 1, mySubs.size())
+                                .withStyle(ChatFormatting.GRAY),
+                        cx, topPos + CONTENT_TOP + 148, 0xFFB0B8C8, false);
+            }
+        }
+
+        int n = currentChannel.gasConfig().subchannelCount();
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.gas.sub_count", n),
+                cx, topPos + BG_H - 18, 0xFFB0B8C8, false);
+    }
+
+    /** Stub used only as a placeholder so the slot render-loop compiles without a mouse arg. */
+    private static boolean mouseInside(int x, int y, GuiGraphics gfx) { return false; }
+
+    private boolean handleGasPanelClick(double mx, double my) {
+        if (!isGasModeActive() || currentChannel == null) return false;
+        int slot = getGasesSlotAt((int) mx, (int) my);
+        if (slot >= 0) {
+            // Cursor → filter slot. Mekanism filled gas tanks (chemical tanks, canisters) expose
+            // IGasHandler on their item cap; we read the first gas they contain.
+            net.minecraft.world.item.ItemStack carried = menu.getCarried();
+            if (!carried.isEmpty()) {
+                net.minecraft.resources.ResourceLocation gasId = tryReadGasFromItem(carried);
+                if (gasId != null) { sendAddGas(gasId); return true; }
+            }
+            var f = resolveCurrentGasFilter();
+            net.minecraft.resources.@Nullable ResourceLocation id = gasFilterAtSlot(f, slot);
+            if (id != null) sendRemoveGas(id);
+            return true;
+        }
+        return false;
+    }
+
+    /** Mekanism-gated: read a Gas registry id from a carried ItemStack via the Mekanism cap path. */
+    private static net.minecraft.resources.@Nullable ResourceLocation tryReadGasFromItem(net.minecraft.world.item.ItemStack stack) {
+        if (stack.isEmpty() || !Compat.mekanismLoaded()) return null;
+        return com.quantumchanneling.compat.mekanism.GasItemRead.read(stack);
+    }
+
+    private void buildHeatPanel() {
+        if (currentChannel == null) return;
+        int cx = leftPos + 8;
+        boolean enabled = currentChannel.heatConfig().isEnabled();
+        boolean locked = !Compat.heatProviderLoaded();
+        PhotonButton btn = PhotonButton.of(cx, topPos + CONTENT_TOP + 4, 120, 18,
+                Component.translatable(enabled
+                        ? "gui.quantumchanneling.heat.enabled"
+                        : "gui.quantumchanneling.heat.disabled"),
+                b -> {
+                    if (currentChannel != null) ModMessages.sendToServer(
+                            new SetHeatEnabledPacket(currentChannel.id(), !enabled));
+                }, this::accentColor);
+        btn.active = !locked;
+        addRenderableWidget(btn);
+    }
+
+    private void renderHeatPanel(GuiGraphics gfx) {
+        int cx = leftPos + 8;
+        int rw = BG_W - 16;
+        boolean locked = !Compat.heatProviderLoaded();
+        if (currentChannel == null) {
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.unbound")
+                    .withStyle(ChatFormatting.GRAY), cx, topPos + CONTENT_TOP + 4, 0xAAAAAA, false);
+            return;
+        }
+        String body = locked
+                ? "gui.quantumchanneling.resource.heat.locked_body"
+                : "gui.quantumchanneling.heat.body";
+        var lines = font.split(Component.translatable(body).withStyle(ChatFormatting.GRAY), rw - 8);
+        int y = topPos + CONTENT_TOP + 36;
+        for (var line : lines) {
+            gfx.drawString(font, line, cx, y, locked ? 0xFFE08080 : 0xFFAAAAAA, false);
+            y += 11;
+        }
+    }
 }
 

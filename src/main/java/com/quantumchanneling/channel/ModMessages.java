@@ -133,6 +133,75 @@ public final class ModMessages {
         CHANNEL.messageBuilder(MoveDeviceSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
                 .encoder(MoveDeviceSubchannelPacket::encode).decoder(MoveDeviceSubchannelPacket::decode)
                 .consumerMainThread(MoveDeviceSubchannelPacket::handle).add();
+
+        // --- Fluid-mode packets: full parallel to the item-mode set above. ---
+        CHANNEL.messageBuilder(SetFluidEnabledPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetFluidEnabledPacket::encode).decoder(SetFluidEnabledPacket::decode)
+                .consumerMainThread(SetFluidEnabledPacket::handle).add();
+        CHANNEL.messageBuilder(CreateFluidSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(CreateFluidSubchannelPacket::encode).decoder(CreateFluidSubchannelPacket::decode)
+                .consumerMainThread(CreateFluidSubchannelPacket::handle).add();
+        CHANNEL.messageBuilder(DeleteFluidSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(DeleteFluidSubchannelPacket::encode).decoder(DeleteFluidSubchannelPacket::decode)
+                .consumerMainThread(DeleteFluidSubchannelPacket::handle).add();
+        CHANNEL.messageBuilder(SetFluidSubchannelFilterModePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetFluidSubchannelFilterModePacket::encode).decoder(SetFluidSubchannelFilterModePacket::decode)
+                .consumerMainThread(SetFluidSubchannelFilterModePacket::handle).add();
+        CHANNEL.messageBuilder(AddSubchannelFluidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddSubchannelFluidPacket::encode).decoder(AddSubchannelFluidPacket::decode)
+                .consumerMainThread(AddSubchannelFluidPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveSubchannelFluidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveSubchannelFluidPacket::encode).decoder(RemoveSubchannelFluidPacket::decode)
+                .consumerMainThread(RemoveSubchannelFluidPacket::handle).add();
+        CHANNEL.messageBuilder(AddEmitterFluidVoidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddEmitterFluidVoidPacket::encode).decoder(AddEmitterFluidVoidPacket::decode)
+                .consumerMainThread(AddEmitterFluidVoidPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveEmitterFluidVoidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveEmitterFluidVoidPacket::encode).decoder(RemoveEmitterFluidVoidPacket::decode)
+                .consumerMainThread(RemoveEmitterFluidVoidPacket::handle).add();
+        CHANNEL.messageBuilder(SubscribeDeviceFluidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SubscribeDeviceFluidPacket::encode).decoder(SubscribeDeviceFluidPacket::decode)
+                .consumerMainThread(SubscribeDeviceFluidPacket::handle).add();
+        CHANNEL.messageBuilder(MoveDeviceFluidSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(MoveDeviceFluidSubchannelPacket::encode).decoder(MoveDeviceFluidSubchannelPacket::decode)
+                .consumerMainThread(MoveDeviceFluidSubchannelPacket::handle).add();
+
+        // Gas + heat master enable (Mekanism-gated runtime).
+        CHANNEL.messageBuilder(SetGasEnabledPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetGasEnabledPacket::encode).decoder(SetGasEnabledPacket::decode)
+                .consumerMainThread(SetGasEnabledPacket::handle).add();
+        CHANNEL.messageBuilder(SetHeatEnabledPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetHeatEnabledPacket::encode).decoder(SetHeatEnabledPacket::decode)
+                .consumerMainThread(SetHeatEnabledPacket::handle).add();
+
+        // --- Gas subchannel packets (Mekanism-gated runtime). ---
+        CHANNEL.messageBuilder(CreateGasSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(CreateGasSubchannelPacket::encode).decoder(CreateGasSubchannelPacket::decode)
+                .consumerMainThread(CreateGasSubchannelPacket::handle).add();
+        CHANNEL.messageBuilder(DeleteGasSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(DeleteGasSubchannelPacket::encode).decoder(DeleteGasSubchannelPacket::decode)
+                .consumerMainThread(DeleteGasSubchannelPacket::handle).add();
+        CHANNEL.messageBuilder(SetGasSubchannelFilterModePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetGasSubchannelFilterModePacket::encode).decoder(SetGasSubchannelFilterModePacket::decode)
+                .consumerMainThread(SetGasSubchannelFilterModePacket::handle).add();
+        CHANNEL.messageBuilder(AddSubchannelGasPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddSubchannelGasPacket::encode).decoder(AddSubchannelGasPacket::decode)
+                .consumerMainThread(AddSubchannelGasPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveSubchannelGasPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveSubchannelGasPacket::encode).decoder(RemoveSubchannelGasPacket::decode)
+                .consumerMainThread(RemoveSubchannelGasPacket::handle).add();
+        CHANNEL.messageBuilder(AddEmitterGasVoidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddEmitterGasVoidPacket::encode).decoder(AddEmitterGasVoidPacket::decode)
+                .consumerMainThread(AddEmitterGasVoidPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveEmitterGasVoidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveEmitterGasVoidPacket::encode).decoder(RemoveEmitterGasVoidPacket::decode)
+                .consumerMainThread(RemoveEmitterGasVoidPacket::handle).add();
+        CHANNEL.messageBuilder(SubscribeDeviceGasPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SubscribeDeviceGasPacket::encode).decoder(SubscribeDeviceGasPacket::decode)
+                .consumerMainThread(SubscribeDeviceGasPacket::handle).add();
+        CHANNEL.messageBuilder(MoveDeviceGasSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(MoveDeviceGasSubchannelPacket::encode).decoder(MoveDeviceGasSubchannelPacket::decode)
+                .consumerMainThread(MoveDeviceGasSubchannelPacket::handle).add();
     }
 
     public static void sendToServer(Object msg) { CHANNEL.sendToServer(msg); }

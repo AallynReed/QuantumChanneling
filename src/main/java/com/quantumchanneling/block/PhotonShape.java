@@ -126,11 +126,19 @@ public final class PhotonShape {
      * device can route — energy (FE) or items (IItemHandler). The energy check still honors
      * source/sink discrimination (an emitter only draws to extractable energy stores), but any
      * IItemHandler is a valid items-side neighbor regardless of mode since items flow both ways.
+     *
+     * <p><b>Channel-bound devices never connect to each other.</b> Two emitters, two receivers, an
+     * emitter next to a receiver, etc. all skip the connection arm. Routing across the channel still
+     * happens through {@link com.quantumchanneling.channel.QuantumChannel#members()}, not adjacency
+     * — the arm is purely a hint for "this side talks to a non-channel neighbor". Drawing arms
+     * between adjacent channel devices would suggest a direct local link that doesn't exist (the
+     * channel is the link), and would also encourage users to stack devices uselessly.
      */
     public static boolean detectConnection(BlockGetter level, BlockPos pos, Direction dir, ConnectionMode mode) {
         if (mode == ConnectionMode.NONE) return false;
         BlockEntity neighbor = level.getBlockEntity(pos.relative(dir));
         if (neighbor == null) return false;
+        if (neighbor instanceof com.quantumchanneling.blockentity.ChannelBoundBlockEntity) return false;
         Direction face = dir.getOpposite();
 
         IEnergyStorage energy = neighbor.getCapability(ForgeCapabilities.ENERGY, face).orElse(null);

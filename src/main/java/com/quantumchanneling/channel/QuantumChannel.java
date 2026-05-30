@@ -52,6 +52,12 @@ public class QuantumChannel {
 
     /** Item-transfer settings: enabled, batch size, dynamic subchannels. Persisted. */
     private final ItemChannelConfig itemConfig = new ItemChannelConfig();
+    /** Fluid-transfer settings (vanilla Forge IFluidHandler). Persisted. Parallel to itemConfig. */
+    private final FluidChannelConfig fluidConfig = new FluidChannelConfig();
+    /** Gas master-enable (Mekanism IGasHandler). v1 single-bus; subchannels later. */
+    private final GasChannelConfig gasConfig = new GasChannelConfig();
+    /** Heat thermal-wire master-enable (Mekanism IHeatHandler). */
+    private final HeatChannelConfig heatConfig = new HeatChannelConfig();
 
     /**
      * Reverse index: subchannel UUID → set of emitter positions that subscribe to it. A subchannel
@@ -60,6 +66,10 @@ public class QuantumChannel {
      * survives chunk unloads / world restarts.
      */
     private final Map<UUID, Set<GlobalPos>> subchannelEmitters = new HashMap<>();
+    /** Same shape as {@link #subchannelEmitters}, but for fluid subchannels. */
+    private final Map<UUID, Set<GlobalPos>> fluidSubchannelEmitters = new HashMap<>();
+    /** Same shape, for gas subchannels (Mekanism). */
+    private final Map<UUID, Set<GlobalPos>> gasSubchannelEmitters = new HashMap<>();
 
     public QuantumChannel(UUID id, String name, @Nullable UUID ownerId, String ownerName) {
         this.id = id;
@@ -203,6 +213,78 @@ public class QuantumChannel {
         return set == null ? 0 : set.size();
     }
 
+    /* ---- fluids: same reverse-index pattern as items ---- */
+
+    public FluidChannelConfig fluidConfig() { return fluidConfig; }
+    public GasChannelConfig gasConfig() { return gasConfig; }
+    public HeatChannelConfig heatConfig() { return heatConfig; }
+
+    public void registerEmitterFluidSubscription(GlobalPos emitterPos, UUID subId) {
+        if (subId == null || emitterPos == null) return;
+        if (!fluidConfig.contains(subId)) return;
+        fluidSubchannelEmitters.computeIfAbsent(subId, k -> new HashSet<>()).add(emitterPos);
+    }
+
+    public void unregisterEmitterFluidSubscription(GlobalPos emitterPos, UUID subId) {
+        if (subId == null || emitterPos == null) return;
+        Set<GlobalPos> set = fluidSubchannelEmitters.get(subId);
+        if (set == null) return;
+        if (!set.remove(emitterPos)) return;
+        if (set.isEmpty()) {
+            fluidSubchannelEmitters.remove(subId);
+            fluidConfig.deleteSubchannel(subId);
+        }
+    }
+
+    public void unregisterAllFluidForEmitter(GlobalPos emitterPos) {
+        if (emitterPos == null) return;
+        var it = fluidSubchannelEmitters.entrySet().iterator();
+        while (it.hasNext()) {
+            var entry = it.next();
+            if (entry.getValue().remove(emitterPos) && entry.getValue().isEmpty()) {
+                UUID sub = entry.getKey();
+                it.remove();
+                fluidConfig.deleteSubchannel(sub);
+            }
+        }
+    }
+
+    public int countFluidEmitterSubscribers(UUID subId) {
+        Set<GlobalPos> set = fluidSubchannelEmitters.get(subId);
+        return set == null ? 0 : set.size();
+    }
+
+    /* ---- gas reverse-index ---- */
+
+    public void registerEmitterGasSubscription(GlobalPos emitterPos, UUID subId) {
+        if (subId == null || emitterPos == null) return;
+        if (!gasConfig.contains(subId)) return;
+        gasSubchannelEmitters.computeIfAbsent(subId, k -> new HashSet<>()).add(emitterPos);
+    }
+    public void unregisterEmitterGasSubscription(GlobalPos emitterPos, UUID subId) {
+        if (subId == null || emitterPos == null) return;
+        Set<GlobalPos> set = gasSubchannelEmitters.get(subId);
+        if (set == null) return;
+        if (!set.remove(emitterPos)) return;
+        if (set.isEmpty()) { gasSubchannelEmitters.remove(subId); gasConfig.deleteSubchannel(subId); }
+    }
+    public void unregisterAllGasForEmitter(GlobalPos emitterPos) {
+        if (emitterPos == null) return;
+        var it = gasSubchannelEmitters.entrySet().iterator();
+        while (it.hasNext()) {
+            var entry = it.next();
+            if (entry.getValue().remove(emitterPos) && entry.getValue().isEmpty()) {
+                UUID sub = entry.getKey();
+                it.remove();
+                gasConfig.deleteSubchannel(sub);
+            }
+        }
+    }
+    public int countGasEmitterSubscribers(UUID subId) {
+        Set<GlobalPos> set = gasSubchannelEmitters.get(subId);
+        return set == null ? 0 : set.size();
+    }
+
     public void refreshOwnerName(String n) { if (n != null) this.ownerName = n; }
 
     /**
@@ -257,22 +339,18 @@ public class QuantumChannel {
         // Items config (always saved so default-blacklist/empty-void is recoverable).
         tag.put("ItemConfig", itemConfig.save());
         if (!subchannelEmitters.isEmpty()) {
-            ListTag idx = new ListTag();
-            for (var e : subchannelEmitters.entrySet()) {
-                CompoundTag entry = new CompoundTag();
-                entry.putUUID("Sub", e.getKey());
-                ListTag positions = new ListTag();
-                for (GlobalPos gp : e.getValue()) {
-                    CompoundTag g = new CompoundTag();
-                    g.putString("Dim", gp.dimension().location().toString());
-                    g.putLong("Pos", gp.pos().asLong());
-                    positions.add(g);
-                }
-                entry.put("Emitters", positions);
-                idx.add(entry);
-            }
-            tag.put("SubchannelEmitters", idx);
+            tag.put("SubchannelEmitters", saveSubscriberIndex(subchannelEmitters));
         }
+        // Fluids config + reverse-index — same pattern as items.
+        tag.put("FluidConfig", fluidConfig.save());
+        if (!fluidSubchannelEmitters.isEmpty()) {
+            tag.put("FluidSubchannelEmitters", saveSubscriberIndex(fluidSubchannelEmitters));
+        }
+        tag.put("GasConfig", gasConfig.save());
+        if (!gasSubchannelEmitters.isEmpty()) {
+            tag.put("GasSubchannelEmitters", saveSubscriberIndex(gasSubchannelEmitters));
+        }
+        tag.put("HeatConfig", heatConfig.save());
 
         ListTag mem = new ListTag();
         for (GlobalPos gp : members) {
@@ -325,21 +403,22 @@ public class QuantumChannel {
             net.itemConfig.copyFrom(ItemChannelConfig.load(tag.getCompound("ItemConfig")));
         }
         if (tag.contains("SubchannelEmitters", Tag.TAG_LIST)) {
-            ListTag idx = tag.getList("SubchannelEmitters", Tag.TAG_COMPOUND);
-            for (int i = 0; i < idx.size(); i++) {
-                CompoundTag entry = idx.getCompound(i);
-                if (!entry.hasUUID("Sub")) continue;
-                UUID sub = entry.getUUID("Sub");
-                ListTag positions = entry.getList("Emitters", Tag.TAG_COMPOUND);
-                Set<GlobalPos> set = new HashSet<>();
-                for (int j = 0; j < positions.size(); j++) {
-                    CompoundTag g = positions.getCompound(j);
-                    ResourceKey<Level> dim = ResourceKey.create(Registries.DIMENSION,
-                            new ResourceLocation(g.getString("Dim")));
-                    set.add(GlobalPos.of(dim, BlockPos.of(g.getLong("Pos"))));
-                }
-                if (!set.isEmpty()) net.subchannelEmitters.put(sub, set);
-            }
+            loadSubscriberIndex(tag.getList("SubchannelEmitters", Tag.TAG_COMPOUND), net.subchannelEmitters);
+        }
+        if (tag.contains("FluidConfig", Tag.TAG_COMPOUND)) {
+            net.fluidConfig.copyFrom(FluidChannelConfig.load(tag.getCompound("FluidConfig")));
+        }
+        if (tag.contains("FluidSubchannelEmitters", Tag.TAG_LIST)) {
+            loadSubscriberIndex(tag.getList("FluidSubchannelEmitters", Tag.TAG_COMPOUND), net.fluidSubchannelEmitters);
+        }
+        if (tag.contains("GasConfig", Tag.TAG_COMPOUND)) {
+            net.gasConfig.copyFrom(GasChannelConfig.load(tag.getCompound("GasConfig")));
+        }
+        if (tag.contains("GasSubchannelEmitters", Tag.TAG_LIST)) {
+            loadSubscriberIndex(tag.getList("GasSubchannelEmitters", Tag.TAG_COMPOUND), net.gasSubchannelEmitters);
+        }
+        if (tag.contains("HeatConfig", Tag.TAG_COMPOUND)) {
+            net.heatConfig.copyFrom(HeatChannelConfig.load(tag.getCompound("HeatConfig")));
         }
 
         ListTag mem = tag.getList("Members", Tag.TAG_COMPOUND);
@@ -371,6 +450,43 @@ public class QuantumChannel {
 
     private static Permission parseRole(String s) {
         try { return Permission.valueOf(s); } catch (Exception e) { return Permission.USER; }
+    }
+
+    /** Shared serializer for the item / fluid subchannel-emitter reverse indexes. */
+    private static ListTag saveSubscriberIndex(Map<UUID, Set<GlobalPos>> index) {
+        ListTag out = new ListTag();
+        for (var e : index.entrySet()) {
+            CompoundTag entry = new CompoundTag();
+            entry.putUUID("Sub", e.getKey());
+            ListTag positions = new ListTag();
+            for (GlobalPos gp : e.getValue()) {
+                CompoundTag g = new CompoundTag();
+                g.putString("Dim", gp.dimension().location().toString());
+                g.putLong("Pos", gp.pos().asLong());
+                positions.add(g);
+            }
+            entry.put("Emitters", positions);
+            out.add(entry);
+        }
+        return out;
+    }
+
+    /** Shared loader; populates {@code into} in place. */
+    private static void loadSubscriberIndex(ListTag idx, Map<UUID, Set<GlobalPos>> into) {
+        for (int i = 0; i < idx.size(); i++) {
+            CompoundTag entry = idx.getCompound(i);
+            if (!entry.hasUUID("Sub")) continue;
+            UUID sub = entry.getUUID("Sub");
+            ListTag positions = entry.getList("Emitters", Tag.TAG_COMPOUND);
+            Set<GlobalPos> set = new HashSet<>();
+            for (int j = 0; j < positions.size(); j++) {
+                CompoundTag g = positions.getCompound(j);
+                ResourceKey<Level> dim = ResourceKey.create(Registries.DIMENSION,
+                        new ResourceLocation(g.getString("Dim")));
+                set.add(GlobalPos.of(dim, BlockPos.of(g.getLong("Pos"))));
+            }
+            if (!set.isEmpty()) into.put(sub, set);
+        }
     }
 
     @Override public boolean equals(Object o) { return o instanceof QuantumChannel n && Objects.equals(n.id, id); }

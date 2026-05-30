@@ -53,7 +53,13 @@ public record ChannelInfo(
          */
         List<ChargingNowEntry> chargingNow,
         /** Per-channel item-mode settings (dynamic subchannels). Always present. */
-        ItemChannelConfig itemConfig
+        ItemChannelConfig itemConfig,
+        /** Per-channel fluid-mode settings (dynamic subchannels). Always present. */
+        FluidChannelConfig fluidConfig,
+        /** Per-channel gas master-enable (Mekanism). Always present (even when Mekanism is absent). */
+        GasChannelConfig gasConfig,
+        /** Per-channel heat thermal-wire master-enable (Mekanism). Always present. */
+        HeatChannelConfig heatConfig
 ) {
 
     public int slotPriority(int slotBit) {
@@ -138,7 +144,19 @@ public record ChannelInfo(
             /** Subchannels this device subscribes to (ordered: emitter priority, receiver display). */
             List<UUID> subscribedSubchannels,
             /** Per-emitter void filter. Always serialized; only meaningful for emitters. */
-            ItemFilter voidFilter
+            ItemFilter voidFilter,
+            /** Same shape as subscribedSubchannels, but for fluids. */
+            List<UUID> subscribedFluidSubchannels,
+            /** Per-emitter fluid void filter. Always serialized; only meaningful for emitters. */
+            FluidFilter fluidVoidFilter,
+            /** Gas subchannel subscriptions. */
+            List<UUID> subscribedGasSubchannels,
+            /** Per-emitter gas void filter. Only meaningful for emitters. */
+            GasFilter gasVoidFilter,
+            /** Per-device resource participation. False = device opts out of that resource. */
+            boolean itemsEnabled,
+            boolean fluidsEnabled,
+            boolean gasEnabled
     ) {
         public void write(FriendlyByteBuf b) {
             b.writeUtf(dim, 80);
@@ -153,6 +171,15 @@ public record ChannelInfo(
             b.writeVarInt(subscribedSubchannels.size());
             for (UUID id : subscribedSubchannels) b.writeUUID(id);
             voidFilter.write(b);
+            b.writeVarInt(subscribedFluidSubchannels.size());
+            for (UUID id : subscribedFluidSubchannels) b.writeUUID(id);
+            fluidVoidFilter.write(b);
+            b.writeVarInt(subscribedGasSubchannels.size());
+            for (UUID id : subscribedGasSubchannels) b.writeUUID(id);
+            gasVoidFilter.write(b);
+            b.writeBoolean(itemsEnabled);
+            b.writeBoolean(fluidsEnabled);
+            b.writeBoolean(gasEnabled);
         }
         public static MemberPos read(FriendlyByteBuf b) {
             String dim = b.readUtf(80);
@@ -168,7 +195,18 @@ public record ChannelInfo(
             List<UUID> subs = new ArrayList<>(n);
             for (int i = 0; i < n; i++) subs.add(b.readUUID());
             ItemFilter voidF = ItemFilter.read(b);
-            return new MemberPos(dim, pos, type, pri, surge, cl, cap, rate, name, subs, voidF);
+            int fn = b.readVarInt();
+            List<UUID> fluidSubs = new ArrayList<>(fn);
+            for (int i = 0; i < fn; i++) fluidSubs.add(b.readUUID());
+            FluidFilter fluidVoidF = FluidFilter.read(b);
+            int gn = b.readVarInt();
+            List<UUID> gasSubs = new ArrayList<>(gn);
+            for (int i = 0; i < gn; i++) gasSubs.add(b.readUUID());
+            GasFilter gasVoidF = GasFilter.read(b);
+            boolean itEn = b.readBoolean();
+            boolean flEn = b.readBoolean();
+            boolean gaEn = b.readBoolean();
+            return new MemberPos(dim, pos, type, pri, surge, cl, cap, rate, name, subs, voidF, fluidSubs, fluidVoidF, gasSubs, gasVoidF, itEn, flEn, gaEn);
         }
         public BlockPos pos() { return BlockPos.of(packedPos); }
         public String typeName() {
@@ -220,6 +258,9 @@ public record ChannelInfo(
         buf.writeVarInt(chargingNow.size());
         for (ChargingNowEntry c : chargingNow) c.write(buf);
         itemConfig.write(buf);
+        fluidConfig.write(buf);
+        gasConfig.write(buf);
+        heatConfig.write(buf);
     }
 
     public static ChannelInfo read(FriendlyByteBuf buf) {
@@ -257,9 +298,12 @@ public record ChannelInfo(
         List<ChargingNowEntry> cnow = new ArrayList<>(cn);
         for (int i = 0; i < cn; i++) cnow.add(ChargingNowEntry.read(buf));
         ItemChannelConfig icfg = ItemChannelConfig.read(buf);
+        FluidChannelConfig fcfg = FluidChannelConfig.read(buf);
+        GasChannelConfig gcfg = GasChannelConfig.read(buf);
+        HeatChannelConfig hcfg = HeatChannelConfig.read(buf);
         return new ChannelInfo(id, name, owner, ownerName, members, canManage, isPublic, slots, subscribed,
                 emitterCount, receiverCount, totalIn, totalOut, color, hasPin, pin, canUse,
-                sh, sho, si, sa, sc, armorPr, ps, ms, cnow, icfg);
+                sh, sho, si, sa, sc, armorPr, ps, ms, cnow, icfg, fcfg, gcfg, hcfg);
     }
 
     public static ChannelInfo from(QuantumChannel net, @Nullable UUID viewerId, boolean subscribed, MinecraftServer server) {
@@ -288,6 +332,11 @@ public record ChannelInfo(
             String customName = "";
             List<UUID> subs = new ArrayList<>();
             ItemFilter voidFilterCopy = new ItemFilter(false);   // default (blacklist empty) for non-emitters
+            List<UUID> fluidSubs = new ArrayList<>();
+            FluidFilter fluidVoidFilterCopy = new FluidFilter(false);
+            List<UUID> gasSubs = new ArrayList<>();
+            GasFilter gasVoidFilterCopy = new GasFilter(false);
+            boolean itEn = true, flEn = true, gaEn = true;
             ServerLevel level = server.getLevel(gp.dimension());
             if (level != null && level.isLoaded(gp.pos())) {
                 BlockEntity be = level.getBlockEntity(gp.pos());
@@ -298,22 +347,29 @@ public record ChannelInfo(
                     cap = bound.getThroughputCap();
                     customName = bound.getCustomName();
                     subs.addAll(bound.getSubscribedSubchannels());
+                    fluidSubs.addAll(bound.getSubscribedFluidSubchannels());
+                    gasSubs.addAll(bound.getSubscribedGasSubchannels());
+                    itEn = bound.isItemsEnabled();
+                    flEn = bound.isFluidsEnabled();
+                    gaEn = bound.isGasEnabled();
                 }
                 if (be instanceof PhotonEmitterBlockEntity em) {
                     type = TYPE_EMITTER; emitterCount++; rate = em.getLastTickThroughput(); totalIn += rate;
                     voidFilterCopy.copyFrom(em.voidFilter());
+                    fluidVoidFilterCopy.copyFrom(em.fluidVoidFilter());
+                    gasVoidFilterCopy.copyFrom(em.gasVoidFilter());
                 } else if (be instanceof PhotonReceiverBlockEntity rc) {
                     type = TYPE_RECEIVER; receiverCount++; rate = rc.getLastTickThroughput(); totalOut += rate;
                 } else if (be instanceof PhotonStorageBlockEntity st) {
                     type = TYPE_STORAGE;
-                    // Storage stored is a long; display is int-bounded — clamp here.
                     rate = (int) Math.min(st.getStored(), (long) Integer.MAX_VALUE);
                 } else if (be instanceof PhotonManagerBlockEntity) {
                     type = TYPE_MANAGER;
                 }
             }
             ms.add(new MemberPos(dim, packed, type, priority, surge, chunkLoaded, cap, rate,
-                    customName, subs, voidFilterCopy));
+                    customName, subs, voidFilterCopy, fluidSubs, fluidVoidFilterCopy, gasSubs, gasVoidFilterCopy,
+                    itEn, flEn, gaEn));
         }
         boolean canManage = net.canManage(viewerId);
         boolean canUse = net.canUse(viewerId);
@@ -367,6 +423,9 @@ public record ChannelInfo(
                 new int[]{ net.armorPiecePriority(0), net.armorPiecePriority(1),
                            net.armorPiecePriority(2), net.armorPiecePriority(3) },
                 ps, ms, chargingNow,
-                net.itemConfig());
+                net.itemConfig(),
+                net.fluidConfig(),
+                net.gasConfig(),
+                net.heatConfig());
     }
 }

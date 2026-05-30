@@ -91,12 +91,13 @@ public final class ItemTransitHelper {
             if (lvl == null || !lvl.isLoaded(gp.pos())) continue;
             BlockEntity be = lvl.getBlockEntity(gp.pos());
             if (!(be instanceof PhotonReceiverBlockEntity rcv)) continue;
+            if (!rcv.isItemsEnabled()) continue;
             if (rcv.isSubscribedTo(subchannelId)) return true;
         }
         return false;
     }
 
-    /** Loaded receivers for one subchannel, sorted by priority desc then position. */
+    /** Loaded receivers for one subchannel, sorted by priority desc then position. Skips items-disabled. */
     public static List<PhotonReceiverBlockEntity> loadedReceiversFor(MinecraftServer server,
                                                                      QuantumChannel channel,
                                                                      UUID subchannelId) {
@@ -107,6 +108,7 @@ public final class ItemTransitHelper {
             if (lvl == null || !lvl.isLoaded(gp.pos())) continue;
             BlockEntity be = lvl.getBlockEntity(gp.pos());
             if (!(be instanceof PhotonReceiverBlockEntity rcv)) continue;
+            if (!rcv.isItemsEnabled()) continue;
             if (!rcv.isSubscribedTo(subchannelId)) continue;
             out.add(rcv);
         }
@@ -173,7 +175,7 @@ public final class ItemTransitHelper {
     public static int pullFromAdjacentAndRoute(ServerLevel level, PhotonEmitterBlockEntity emitter,
                                                QuantumChannel channel, int budget) {
         if (budget <= 0) return 0;
-        if (!channel.itemConfig().isEnabled()) return 0;
+        if (!emitter.isItemsEnabled()) return 0;
         BlockPos origin = emitter.getBlockPos();
         for (Direction side : Direction.values()) {
             BlockEntity neighbor = level.getBlockEntity(origin.relative(side));

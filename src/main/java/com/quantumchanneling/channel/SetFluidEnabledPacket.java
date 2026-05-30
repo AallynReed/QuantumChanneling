@@ -9,15 +9,15 @@ import net.minecraftforge.network.NetworkEvent;
 
 import java.util.function.Supplier;
 
-/** Client → server: flip the per-device items participation flag. */
-public record SetItemEnabledPacket(BlockPos pos, boolean enabled) {
-    public static void encode(SetItemEnabledPacket p, FriendlyByteBuf b) {
+/** Client → server: flip the per-device fluids participation flag. */
+public record SetFluidEnabledPacket(BlockPos pos, boolean enabled) {
+    public static void encode(SetFluidEnabledPacket p, FriendlyByteBuf b) {
         b.writeBlockPos(p.pos); b.writeBoolean(p.enabled);
     }
-    public static SetItemEnabledPacket decode(FriendlyByteBuf b) {
-        return new SetItemEnabledPacket(b.readBlockPos(), b.readBoolean());
+    public static SetFluidEnabledPacket decode(FriendlyByteBuf b) {
+        return new SetFluidEnabledPacket(b.readBlockPos(), b.readBoolean());
     }
-    public static void handle(SetItemEnabledPacket p, Supplier<NetworkEvent.Context> sup) {
+    public static void handle(SetFluidEnabledPacket p, Supplier<NetworkEvent.Context> sup) {
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
@@ -28,7 +28,7 @@ public record SetItemEnabledPacket(BlockPos pos, boolean enabled) {
             if (dx * dx + dy * dy + dz * dz > 64.0) return;
             BlockEntity be = player.level().getBlockEntity(p.pos);
             if (be instanceof ChannelBoundBlockEntity bound) {
-                bound.setItemsEnabled(p.enabled);
+                bound.setFluidsEnabled(p.enabled);
                 CreateChannelPacket.sendListBackTo(player);
             }
         });

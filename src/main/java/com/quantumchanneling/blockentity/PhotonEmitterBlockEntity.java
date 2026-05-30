@@ -4,6 +4,9 @@ import com.quantumchanneling.Config;
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.menu.PhotonNodeMenu;
 import com.quantumchanneling.channel.ChannelData;
+import com.quantumchanneling.channel.FluidFilter;
+import com.quantumchanneling.channel.FluidTransitHelper;
+import com.quantumchanneling.channel.GasFilter;
 import com.quantumchanneling.channel.ItemFilter;
 import com.quantumchanneling.channel.ItemTransitHelper;
 import com.quantumchanneling.channel.QuantumChannel;
@@ -29,6 +32,8 @@ import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.common.util.LazyOptional;
 import net.minecraftforge.energy.IEnergyStorage;
+import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.fluids.capability.IFluidHandler;
 import net.minecraftforge.items.IItemHandler;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -53,6 +58,20 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     private int secondAccumulator = 0;
     private int secondTickCounter = 0;
 
+    /**
+     * Energy capability — pure Forge Energy ({@link IEnergyStorage}). This is the universal
+     * energy API in 1.20.1; every modern mod uses it directly or wraps it:
+     * <ul>
+     *   <li><b>Mekanism</b> joule-based machines expose FE via an auto-converter on every face.</li>
+     *   <li><b>Applied Energistics 2</b> uses internal AE units (1 AE = 2 RF) but its
+     *       <i>Energy Acceptor</i> block consumes FE and pushes it into the network. Place an
+     *       Energy Acceptor adjacent to a receiver and the AE grid charges normally.</li>
+     *   <li><b>Refined Storage</b>, <b>Create</b>, <b>Draconic Evolution</b>, <b>Solar Flux</b>,
+     *       <b>Brandon's Core</b> — all native FE consumers, work out of the box.</li>
+     *   <li><b>Tesla</b> is dead in 1.20.1. The library survives only as a thin FE wrapper; any
+     *       remaining Tesla-using machine exposes FE alongside, so we don't need a separate cap.</li>
+     * </ul>
+     */
     private final IEnergyStorage energyIO = new IEnergyStorage() {
         @Override
         public int receiveEnergy(int maxReceive, boolean simulate) {
@@ -78,6 +97,10 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
      * with no entries} so a fresh emitter voids nothing.
      */
     private final ItemFilter voidFilter = new ItemFilter(false);
+    /** Per-emitter fluid void filter — same blacklist-only semantics as the item one. */
+    private final FluidFilter fluidVoidFilter = new FluidFilter(false);
+    /** Per-emitter gas void filter. */
+    private final GasFilter gasVoidFilter = new GasFilter(false);
 
     /**
      * Per-item decision cache. Wiped whenever {@link QuantumChannel#itemConfig()#maskVersion()} or
@@ -86,8 +109,14 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     private final Map<ResourceLocation, ItemTransitHelper.Decision> decisionCache = new HashMap<>();
     private int cachedChannelMaskVersion = -1;
     private int cachedLocalEditCount = -1;
+    /** Same shape as {@link #decisionCache} but for fluid routing — keyed by Fluid registry id. */
+    private final Map<ResourceLocation, FluidTransitHelper.Decision> fluidDecisionCache = new HashMap<>();
+    private int cachedFluidChannelMaskVersion = -1;
+    private int cachedFluidLocalEditCount = -1;
 
     public ItemFilter voidFilter() { return voidFilter; }
+    public FluidFilter fluidVoidFilter() { return fluidVoidFilter; }
+    public GasFilter gasVoidFilter() { return gasVoidFilter; }
 
     /** Cache-respecting wrapper around {@link ItemTransitHelper#evaluate}. */
     public ItemTransitHelper.Decision decide(QuantumChannel channel, ItemStack stack) {
@@ -106,6 +135,23 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
                 k -> ItemTransitHelper.evaluate(server, this, channel, stack));
     }
 
+    /** Fluid analog of {@link #decide(QuantumChannel, ItemStack)}. */
+    public FluidTransitHelper.Decision decideFluid(QuantumChannel channel, FluidStack stack) {
+        if (stack == null || stack.isEmpty()) return FluidTransitHelper.Decision.REJECT;
+        int channelMV = channel == null ? -1 : channel.fluidConfig().maskVersion();
+        int localMV = getLocalEditCount();
+        if (channelMV != cachedFluidChannelMaskVersion || localMV != cachedFluidLocalEditCount) {
+            fluidDecisionCache.clear();
+            cachedFluidChannelMaskVersion = channelMV;
+            cachedFluidLocalEditCount = localMV;
+        }
+        ResourceLocation id = FluidTransitHelper.idOf(stack);
+        if (id == null) return FluidTransitHelper.Decision.REJECT;
+        MinecraftServer server = (level instanceof ServerLevel sl) ? sl.getServer() : null;
+        return fluidDecisionCache.computeIfAbsent(id,
+                k -> FluidTransitHelper.evaluate(server, this, channel, stack));
+    }
+
     /**
      * Virtual single-slot item handler. AE2 importers, RS exporters, hoppers, and anything else
      * pushing items via {@link IItemHandler#insertItem} hit this. Inserts run through the same
@@ -120,6 +166,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         @Override
         public @NotNull ItemStack insertItem(int slot, @NotNull ItemStack stack, boolean simulate) {
             if (stack.isEmpty()) return stack;
+            if (!isItemsEnabled()) return stack;
             if (!(level instanceof ServerLevel sl)) return stack;
             UUID channelId = getChannelId();
             if (channelId == null) return stack;
@@ -129,6 +176,33 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         }
     };
     private LazyOptional<IItemHandler> itemCap = LazyOptional.of(() -> itemIO);
+
+    /**
+     * Virtual fluid handler. Any neighbor that pushes fluids via {@link IFluidHandler#fill}
+     * (Mekanism pipes, Create, vanilla buckets via dispensers, etc.) hits this. Pushes go through
+     * the same void + subscribed-subchannels + direct-push pipeline as the active fluid tick.
+     */
+    private final IFluidHandler fluidIO = new IFluidHandler() {
+        @Override public int getTanks() { return 1; }
+        @Override public @NotNull FluidStack getFluidInTank(int tank) { return FluidStack.EMPTY; }
+        @Override public int getTankCapacity(int tank) { return Integer.MAX_VALUE; }
+        @Override public boolean isFluidValid(int tank, @NotNull FluidStack stack) { return true; }
+        @Override public @NotNull FluidStack drain(int maxDrain, FluidAction action) { return FluidStack.EMPTY; }
+        @Override public @NotNull FluidStack drain(FluidStack resource, FluidAction action) { return FluidStack.EMPTY; }
+        @Override
+        public int fill(FluidStack resource, FluidAction action) {
+            if (resource == null || resource.isEmpty()) return 0;
+            if (!isFluidsEnabled()) return 0;
+            if (!(level instanceof ServerLevel sl)) return 0;
+            UUID channelId = getChannelId();
+            if (channelId == null) return 0;
+            QuantumChannel net = ChannelData.get(sl.getServer()).getChannel(channelId);
+            if (net == null) return 0;
+            FluidStack leftover = FluidTransitHelper.route(sl, PhotonEmitterBlockEntity.this, net, resource, action);
+            return resource.getAmount() - leftover.getAmount();
+        }
+    };
+    private LazyOptional<IFluidHandler> fluidCap = LazyOptional.of(() -> fluidIO);
 
     private final ContainerData containerData = new ContainerData() {
         @Override
@@ -244,6 +318,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         // All-in-one transport: every device exposes every resource cap simultaneously.
         if (cap == ForgeCapabilities.ENERGY) return energyCap.cast();
         if (cap == ForgeCapabilities.ITEM_HANDLER) return itemCap.cast();
+        if (cap == ForgeCapabilities.FLUID_HANDLER) return fluidCap.cast();
         return super.getCapability(cap, side);
     }
 
@@ -252,6 +327,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         super.invalidateCaps();
         energyCap.invalidate();
         itemCap.invalidate();
+        fluidCap.invalidate();
     }
 
     @Override
@@ -259,6 +335,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         super.reviveCaps();
         energyCap = LazyOptional.of(() -> energyIO);
         itemCap = LazyOptional.of(() -> itemIO);
+        fluidCap = LazyOptional.of(() -> fluidIO);
     }
 
     /**
@@ -305,8 +382,10 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
 
         if (getChannelId() == null) return;
 
-        // Energy + items run side-by-side. Items only acts every other tick (rate-limited).
+        // Energy + items + fluids all run side-by-side. Items + fluids only act every other tick.
         tickItemsMode(level);
+        tickFluidsMode(level);
+        tickGasAndHeat(level);
 
         int budget = effectiveBudget(Config.emitterPushRate);
         for (Direction side : Direction.values()) {
@@ -326,22 +405,49 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     }
 
     /**
-     * One step of the items-mode tick. Throttled to <b>one transfer per second</b> (every 20 ticks)
-     * during testing so each routing decision is visible in the world frame-by-frame. The batch
-     * size is also clamped to 1 here so the user can watch a single item walk through the system
-     * each cycle — flip TEST_ITEMS_PER_TICK_INTERVAL back to a smaller number (and remove the
-     * batch=1 clamp) once the algorithm is proven.
+     * One step of the items-mode tick. Rate-limited to roughly "1 batch / 2 ticks" by only doing
+     * work on even ticks. Each cycle scans the 6 neighbours for an IItemHandler with an item the
+     * emitter would route, extracts up to {@link com.quantumchanneling.channel.ItemChannelConfig#batchSize()}
+     * items, and pushes them straight to a subscribed receiver's adjacent inventory.
      */
-    private static final long TEST_ITEMS_PER_TICK_INTERVAL = 20L;
     private void tickItemsMode(ServerLevel level) {
-        if (level.getGameTime() % TEST_ITEMS_PER_TICK_INTERVAL != 0L) return;
+        if ((level.getGameTime() & 1L) != 0L) return;
         UUID channelId = getChannelId();
         if (channelId == null) return;
         QuantumChannel net = ChannelData.get(level.getServer()).getChannel(channelId);
         if (net == null) return;
-        int batch = 1;   // testing: one item per cycle, so transfers are observable
+        int batch = net.itemConfig().batchSize();
         int moved = ItemTransitHelper.pullFromAdjacentAndRoute(level, this, net, batch);
         if (moved > 0) forwardedThisTick = moved;
+    }
+
+    /**
+     * Mekanism-gated tick: gas active-pull + heat thermal-wire averaging. Both routines are in
+     * compat.mekanism so this BE never references their classes when Mekanism isn't loaded — the
+     * static call is the JVM load gate, exactly like the cap attacher registration.
+     */
+    private void tickGasAndHeat(ServerLevel level) {
+        if ((level.getGameTime() & 1L) != 0L) return;
+        if (!com.quantumchanneling.client.Compat.mekanismLoaded()) return;
+        UUID channelId = getChannelId();
+        if (channelId == null) return;
+        QuantumChannel net = ChannelData.get(level.getServer()).getChannel(channelId);
+        if (net == null) return;
+        com.quantumchanneling.compat.mekanism.GasIntegration.pullAndRoute(level, this, net);
+        // Heat routing is intentionally disabled — the HEAT side-tab is hidden in the UI and the
+        // thermal-wire model needs more design work. HeatIntegration + HeatChannelConfig stay
+        // intact so existing channels round-trip cleanly; we just never invoke the tick.
+    }
+
+    /** Fluid analog of {@link #tickItemsMode}. mB instead of stacks; same every-other-tick cadence. */
+    private void tickFluidsMode(ServerLevel level) {
+        if ((level.getGameTime() & 1L) != 0L) return;
+        UUID channelId = getChannelId();
+        if (channelId == null) return;
+        QuantumChannel net = ChannelData.get(level.getServer()).getChannel(channelId);
+        if (net == null) return;
+        int batch = net.fluidConfig().batchSize();
+        FluidTransitHelper.pullFromAdjacentAndRoute(level, this, net, batch);
     }
 
     @Override
@@ -351,12 +457,21 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         if (!voidFilter.items().isEmpty() || voidFilter.isWhitelist()) {
             tag.put("VoidFilter", voidFilter.save());
         }
+        if (!fluidVoidFilter.fluids().isEmpty() || fluidVoidFilter.isWhitelist()) {
+            tag.put("FluidVoidFilter", fluidVoidFilter.save());
+        }
+        if (!gasVoidFilter.gases().isEmpty() || gasVoidFilter.isWhitelist()) {
+            tag.put("GasVoidFilter", gasVoidFilter.save());
+        }
     }
 
     @Override
     protected void onLeavingChannel(QuantumChannel channel) {
         if (level instanceof ServerLevel sl) {
-            channel.unregisterAllForEmitter(GlobalPos.of(sl.dimension(), getBlockPos()));
+            GlobalPos here = GlobalPos.of(sl.dimension(), getBlockPos());
+            channel.unregisterAllForEmitter(here);
+            channel.unregisterAllFluidForEmitter(here);
+            channel.unregisterAllGasForEmitter(here);
         }
     }
 
@@ -367,12 +482,26 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
             for (UUID subId : getSubscribedSubchannels()) {
                 channel.registerEmitterSubscription(gp, subId);
             }
+            for (UUID subId : getSubscribedFluidSubchannels()) {
+                channel.registerEmitterFluidSubscription(gp, subId);
+            }
+            for (UUID subId : getSubscribedGasSubchannels()) {
+                channel.registerEmitterGasSubscription(gp, subId);
+            }
         }
     }
 
     @Override
     public void load(CompoundTag tag) {
         super.load(tag);
+        if (tag.contains("FluidVoidFilter", Tag.TAG_COMPOUND)) {
+            fluidVoidFilter.copyFrom(FluidFilter.load(tag.getCompound("FluidVoidFilter")));
+            fluidVoidFilter.setWhitelist(false);   // hard-lock to blacklist
+        }
+        if (tag.contains("GasVoidFilter", Tag.TAG_COMPOUND)) {
+            gasVoidFilter.copyFrom(GasFilter.load(tag.getCompound("GasVoidFilter")));
+            gasVoidFilter.setWhitelist(false);
+        }
         if (tag.contains("VoidFilter", Tag.TAG_COMPOUND)) {
             voidFilter.copyFrom(ItemFilter.load(tag.getCompound("VoidFilter")));
         }

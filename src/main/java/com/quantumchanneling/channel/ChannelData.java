@@ -189,13 +189,7 @@ public class ChannelData extends SavedData {
 
     /* ---- item-mode config (all gated by canManage) ---- */
 
-    public boolean setItemEnabled(UUID channelId, @Nullable UUID actor, boolean enabled) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        net.itemConfig().setEnabled(enabled);
-        setDirty();
-        return true;
-    }
+    // setItemEnabled removed — per-device flag, see ChannelBoundBlockEntity.setItemsEnabled().
 
     public boolean setItemBatchSize(UUID channelId, @Nullable UUID actor, int batchSize) {
         QuantumChannel net = networks.get(channelId);
@@ -252,6 +246,101 @@ public class ChannelData extends SavedData {
         QuantumChannel net = networks.get(channelId);
         if (net == null || !net.canManage(actor)) return false;
         boolean ok = net.itemConfig().removeSubchannelItem(subId, itemId);
+        if (ok) setDirty();
+        return ok;
+    }
+
+    /* ---- fluid-mode config (parallel to items, same canManage gating) ---- */
+
+    // setFluidEnabled removed — per-device flag, see ChannelBoundBlockEntity.setFluidsEnabled().
+
+    public @Nullable UUID createFluidSubchannel(UUID channelId, @Nullable UUID actor, String name) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return null;
+        UUID id = net.fluidConfig().createSubchannel(name);
+        if (id != null) setDirty();
+        return id;
+    }
+
+    public boolean deleteFluidSubchannel(UUID channelId, @Nullable UUID actor, UUID subId) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.fluidConfig().deleteSubchannel(subId);
+        if (ok) setDirty();
+        return ok;
+    }
+
+    public boolean setFluidSubchannelFilterMode(UUID channelId, @Nullable UUID actor, UUID subId, boolean whitelist) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.fluidConfig().setSubchannelFilterMode(subId, whitelist);
+        if (ok) setDirty();
+        return ok;
+    }
+
+    public boolean addSubchannelFluid(UUID channelId, @Nullable UUID actor, UUID subId,
+                                      net.minecraft.resources.ResourceLocation fluidId) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.fluidConfig().addSubchannelFluid(subId, fluidId);
+        if (ok) setDirty();
+        return ok;
+    }
+
+    public boolean removeSubchannelFluid(UUID channelId, @Nullable UUID actor, UUID subId,
+                                         net.minecraft.resources.ResourceLocation fluidId) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.fluidConfig().removeSubchannelFluid(subId, fluidId);
+        if (ok) setDirty();
+        return ok;
+    }
+
+    // setGasEnabled removed — per-device flag, see ChannelBoundBlockEntity.setGasEnabled().
+
+    public boolean setHeatEnabled(UUID channelId, @Nullable UUID actor, boolean enabled) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        net.heatConfig().setEnabled(enabled);
+        setDirty();
+        return true;
+    }
+
+    /* ---- gas subchannel mgmt ---- */
+    public @Nullable UUID createGasSubchannel(UUID channelId, @Nullable UUID actor, String name) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return null;
+        UUID id = net.gasConfig().createSubchannel(name);
+        if (id != null) setDirty();
+        return id;
+    }
+    public boolean deleteGasSubchannel(UUID channelId, @Nullable UUID actor, UUID subId) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.gasConfig().deleteSubchannel(subId);
+        if (ok) setDirty();
+        return ok;
+    }
+    public boolean setGasSubchannelFilterMode(UUID channelId, @Nullable UUID actor, UUID subId, boolean whitelist) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.gasConfig().setSubchannelFilterMode(subId, whitelist);
+        if (ok) setDirty();
+        return ok;
+    }
+    public boolean addSubchannelGas(UUID channelId, @Nullable UUID actor, UUID subId,
+                                    net.minecraft.resources.ResourceLocation gasId) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.gasConfig().addSubchannelGas(subId, gasId);
+        if (ok) setDirty();
+        return ok;
+    }
+    public boolean removeSubchannelGas(UUID channelId, @Nullable UUID actor, UUID subId,
+                                       net.minecraft.resources.ResourceLocation gasId) {
+        QuantumChannel net = networks.get(channelId);
+        if (net == null || !net.canManage(actor)) return false;
+        boolean ok = net.gasConfig().removeSubchannelGas(subId, gasId);
         if (ok) setDirty();
         return ok;
     }

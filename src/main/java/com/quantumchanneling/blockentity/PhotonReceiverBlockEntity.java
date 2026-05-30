@@ -23,6 +23,8 @@ import net.minecraftforge.common.capabilities.Capability;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
 import net.minecraftforge.common.util.LazyOptional;
 import net.minecraftforge.energy.IEnergyStorage;
+import net.minecraftforge.fluids.FluidStack;
+import net.minecraftforge.fluids.capability.IFluidHandler;
 import net.minecraftforge.items.IItemHandler;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -66,6 +68,18 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
         @Override public @NotNull ItemStack extractItem(int slot, int amount, boolean simulate) { return ItemStack.EMPTY; }
     };
     private LazyOptional<IItemHandler> itemCap = LazyOptional.of(() -> itemIO);
+
+    /** Same passive shape as {@link #itemIO} but for fluids — zero-tank, rejects all fills. */
+    private final IFluidHandler fluidIO = new IFluidHandler() {
+        @Override public int getTanks() { return 0; }
+        @Override public @NotNull FluidStack getFluidInTank(int tank) { return FluidStack.EMPTY; }
+        @Override public int getTankCapacity(int tank) { return 0; }
+        @Override public boolean isFluidValid(int tank, @NotNull FluidStack stack) { return false; }
+        @Override public int fill(FluidStack resource, FluidAction action) { return 0; }
+        @Override public @NotNull FluidStack drain(FluidStack resource, FluidAction action) { return FluidStack.EMPTY; }
+        @Override public @NotNull FluidStack drain(int maxDrain, FluidAction action) { return FluidStack.EMPTY; }
+    };
+    private LazyOptional<IFluidHandler> fluidCap = LazyOptional.of(() -> fluidIO);
 
     private final ContainerData containerData = new ContainerData() {
         @Override
@@ -177,6 +191,7 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
         // All-in-one transport: every device exposes every resource cap simultaneously.
         if (cap == ForgeCapabilities.ENERGY) return energyCap.cast();
         if (cap == ForgeCapabilities.ITEM_HANDLER) return itemCap.cast();
+        if (cap == ForgeCapabilities.FLUID_HANDLER) return fluidCap.cast();
         return super.getCapability(cap, side);
     }
 
@@ -185,6 +200,7 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
         super.invalidateCaps();
         energyCap.invalidate();
         itemCap.invalidate();
+        fluidCap.invalidate();
     }
 
     @Override
@@ -192,6 +208,7 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
         super.reviveCaps();
         energyCap = LazyOptional.of(() -> energyIO);
         itemCap = LazyOptional.of(() -> itemIO);
+        fluidCap = LazyOptional.of(() -> fluidIO);
     }
 
     public void serverTick(ServerLevel level) {
