@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    "quantumchanneling:photon_emitter",
+    "quantumchanneling:photon_receiver"
+  ]
+}

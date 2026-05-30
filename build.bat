@@ -13,5 +13,12 @@ if not exist "%JAVA_HOME%\bin\java.exe" (
 )
 
 echo [build.bat] Using JDK at "%JAVA_HOME%"
-call "%~dp0gradlew.bat" build %*
+
+REM No args -> default to 'build'. Otherwise forward whatever was passed
+REM (e.g. build.bat runClient, build.bat clean build, build.bat genIntellijRuns).
+if "%~1"=="" (
+    call "%~dp0gradlew.bat" build
+) else (
+    call "%~dp0gradlew.bat" %*
+)
 exit /b %ERRORLEVEL%
