@@ -1,0 +1,19 @@
+{
+  "itemGroup.quantumchanneling": "Quantum Channeling",
+
+  "item.quantumchanneling.quantum_core": "Quantum Core",
+  "item.quantumchanneling.quantum_tuner": "Quantum Tuner",
+  "block.quantumchanneling.photon_emitter": "Photon Emitter",
+  "block.quantumchanneling.photon_receiver": "Photon Receiver",
+
+  "tooltip.quantumchanneling.tuner.channel": "Channel: %s",
+  "tooltip.quantumchanneling.tuner.no_channel": "No channel held",
+  "tooltip.quantumchanneling.tuner.hint": "Shift + right-click air: create new channel",
+
+  "message.quantumchanneling.tuner.created": "Created channel %s",
+  "message.quantumchanneling.tuner.bound": "Bound device to channel %s",
+  "message.quantumchanneling.tuner.unbound": "Unbound device from channel %s",
+  "message.quantumchanneling.tuner.copied": "Tuner now holds channel %s",
+  "message.quantumchanneling.tuner.already_unbound": "Device is not bound to a channel",
+  "message.quantumchanneling.tuner.empty_on_unbound": "Tuner is empty — shift + right-click air to create a channel"
+}

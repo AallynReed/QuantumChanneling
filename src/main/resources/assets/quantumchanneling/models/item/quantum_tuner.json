@@ -1,0 +1,6 @@
+{
+  "parent": "minecraft:item/handheld",
+  "textures": {
+    "layer0": "quantumchanneling:item/quantum_tuner"
+  }
+}
