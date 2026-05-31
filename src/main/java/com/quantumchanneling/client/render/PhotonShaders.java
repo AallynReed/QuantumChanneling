@@ -24,6 +24,8 @@ public final class PhotonShaders {
     public static ShaderInstance photonVoidShader;
     public static ShaderInstance photonHaloShader;
     public static ShaderInstance photonBeamShader;
+    public static ShaderInstance photonGyroscopeShader;
+    public static ShaderInstance photonBoltShader;
 
     /** Mod-event-bus listener — wires the shaders into Minecraft's shader registry on resource load. */
     public static void register(RegisterShadersEvent event) {
@@ -45,12 +47,26 @@ public final class PhotonShaders {
                             new ResourceLocation(QuantumChanneling.MODID, "photon_beam"),
                             DefaultVertexFormat.POSITION_COLOR_TEX),
                     instance -> photonBeamShader = instance);
+
+            event.registerShader(
+                    new ShaderInstance(event.getResourceProvider(),
+                            new ResourceLocation(QuantumChanneling.MODID, "photon_gyroscope"),
+                            DefaultVertexFormat.POSITION_COLOR_TEX),
+                    instance -> photonGyroscopeShader = instance);
+
+            event.registerShader(
+                    new ShaderInstance(event.getResourceProvider(),
+                            new ResourceLocation(QuantumChanneling.MODID, "photon_bolt"),
+                            DefaultVertexFormat.POSITION_COLOR_TEX),
+                    instance -> photonBoltShader = instance);
         } catch (IOException e) {
             throw new RuntimeException("Failed to load Quantum Channeling photon shaders", e);
         }
     }
 
-    public static ShaderInstance getVoidShader() { return photonVoidShader; }
-    public static ShaderInstance getHaloShader() { return photonHaloShader; }
-    public static ShaderInstance getBeamShader() { return photonBeamShader; }
+    public static ShaderInstance getVoidShader()       { return photonVoidShader; }
+    public static ShaderInstance getHaloShader()       { return photonHaloShader; }
+    public static ShaderInstance getBeamShader()       { return photonBeamShader; }
+    public static ShaderInstance getGyroscopeShader()  { return photonGyroscopeShader; }
+    public static ShaderInstance getBoltShader()       { return photonBoltShader; }
 }

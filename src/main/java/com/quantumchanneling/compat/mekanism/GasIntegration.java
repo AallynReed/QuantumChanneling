@@ -116,7 +116,8 @@ public final class GasIntegration {
         };
     }
 
-    /** Decide → execute. VOID consumes the whole stack; REJECT returns it; ROUTE pushes. */
+    /** Decide → execute. VOID consumes the whole stack; REJECT returns it; ROUTE pushes.
+     *  Capability-pushed entry — no source position, loop detection off here. */
     public static GasStack route(MinecraftServer server, PhotonEmitterBlockEntity emitter,
                                  QuantumChannel channel, GasStack stack, Action action) {
         Decision d = decide(server, emitter, channel, stack);
@@ -124,12 +125,13 @@ public final class GasIntegration {
             case VOID: return GasStack.EMPTY;
             case REJECT: return stack;
             case ROUTE: {
-                GasStack leftover = pushToReceivers(server, emitter, channel, d.subchannelId, stack, action);
+                GasStack leftover = pushToReceivers(server, emitter, channel, d.subchannelId, stack, action, null);
                 if (action == Action.EXECUTE) {
                     long moved = stack.getAmount() - leftover.getAmount();
                     if (moved > 0) {
                         GasSubchannel sub = emitter.gasSubchannel(d.subchannelId);
                         if (sub != null) sub.recordRouted((int) Math.min(moved, Integer.MAX_VALUE));
+                        emitter.recordGasRouted((int) Math.min(moved, Integer.MAX_VALUE));
                     }
                 }
                 return leftover;
@@ -173,7 +175,8 @@ public final class GasIntegration {
     private static GasStack pushToReceivers(MinecraftServer server,
                                             PhotonEmitterBlockEntity emitter,
                                             QuantumChannel channel,
-                                            UUID subchannelId, GasStack stack, Action action) {
+                                            UUID subchannelId, GasStack stack, Action action,
+                                            @org.jetbrains.annotations.Nullable net.minecraft.core.BlockPos sourceBlockPos) {
         List<PhotonReceiverBlockEntity> targets = loadedReceiversFor(server, channel, subchannelId);
         if (targets.isEmpty()) return stack;
         if (emitter.getGasDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
@@ -192,17 +195,27 @@ public final class GasIntegration {
             long key = rcv.getBlockPos().asLong();
             if (emitter.isGasReceiverCooledDown(key, now)) continue;
             long before = remaining.getAmount();
-            remaining = pushToAdjacentTanks(rcv, remaining, action);
+            boolean sameDimension = sourceBlockPos != null
+                    && emitter.getLevel() != null && rcv.getLevel() != null
+                    && emitter.getLevel().dimension().equals(rcv.getLevel().dimension());
+            net.minecraft.core.BlockPos forbidden = sameDimension ? sourceBlockPos : null;
+            remaining = pushToAdjacentTanks(rcv, remaining, action, emitter, forbidden);
             if (action == Action.EXECUTE) {
                 long delivered = before - remaining.getAmount();
-                if (delivered > 0) emitter.clearGasReceiverCooldown(key);
-                else               emitter.markGasReceiverRejected(key, now);
+                if (delivered > 0) {
+                    emitter.clearGasReceiverCooldown(key);
+                    rcv.recordGasRouted((int) Math.min(delivered, Integer.MAX_VALUE));
+                } else {
+                    emitter.markGasReceiverRejected(key, now);
+                }
             }
         }
         return remaining;
     }
 
-    private static GasStack pushToAdjacentTanks(PhotonReceiverBlockEntity origin, GasStack stack, Action action) {
+    private static GasStack pushToAdjacentTanks(PhotonReceiverBlockEntity origin, GasStack stack, Action action,
+                                                @org.jetbrains.annotations.Nullable PhotonEmitterBlockEntity reportingEmitter,
+                                                @org.jetbrains.annotations.Nullable net.minecraft.core.BlockPos forbiddenPos) {
         if (stack.isEmpty()) return stack;
         var level = origin.getLevel();
         if (level == null) return stack;
@@ -216,7 +229,12 @@ public final class GasIntegration {
             if (remaining.isEmpty()) break;
             Direction side = sides[(startIdx + i) % sides.length];
             if (!origin.isGasSideArmed(side)) continue;
-            BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
+            net.minecraft.core.BlockPos neighborPos = origin.getBlockPos().relative(side);
+            if (forbiddenPos != null && forbiddenPos.equals(neighborPos)) {
+                if (action == Action.EXECUTE && reportingEmitter != null) reportingEmitter.markLoopDetected();
+                continue;
+            }
+            BlockEntity neighbor = level.getBlockEntity(neighborPos);
             if (neighbor == null) continue;
             IGasHandler dest = neighbor.getCapability(MekanismCaps.GAS, side.getOpposite()).orElse(null);
             if (dest == null) continue;
@@ -239,7 +257,8 @@ public final class GasIntegration {
         if (budget <= 0 || !emitter.isGasEnabled()) return false;
         for (Direction side : Direction.values()) {
             if (!emitter.isGasSideArmed(side)) continue;
-            BlockEntity neighbor = level.getBlockEntity(emitter.getBlockPos().relative(side));
+            net.minecraft.core.BlockPos neighborPos = emitter.getBlockPos().relative(side);
+            BlockEntity neighbor = level.getBlockEntity(neighborPos);
             if (neighbor == null) continue;
             IGasHandler src = neighbor.getCapability(MekanismCaps.GAS, side.getOpposite()).orElse(null);
             if (src == null) continue;
@@ -252,18 +271,21 @@ public final class GasIntegration {
                 switch (d.kind) {
                     case REJECT -> { continue; }
                     case VOID -> {
-                        src.extractChemical(tank, peek.getAmount(), Action.EXECUTE);
+                        GasStack taken = src.extractChemical(tank, peek.getAmount(), Action.EXECUTE);
+                        long moved = taken.getAmount();
+                        if (moved > 0) emitter.recordGasRouted((int) Math.min(moved, Integer.MAX_VALUE));
                         return true;
                     }
                     case ROUTE -> {
-                        GasStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, Action.SIMULATE);
+                        GasStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, Action.SIMULATE, neighborPos);
                         long wouldMove = peek.getAmount() - simulated.getAmount();
                         if (wouldMove <= 0) continue;
                         GasStack taken = src.extractChemical(tank, wouldMove, Action.EXECUTE);
                         if (taken.isEmpty()) continue;
-                        GasStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, Action.EXECUTE);
+                        GasStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, Action.EXECUTE, neighborPos);
                         long moved = taken.getAmount() - leftover.getAmount();
                         if (moved > 0) {
+                            emitter.recordGasRouted((int) Math.min(moved, Integer.MAX_VALUE));
                             GasSubchannel sub = emitter.gasSubchannel(d.subchannelId);
                             if (sub != null) sub.recordRouted((int) Math.min(moved, Integer.MAX_VALUE));
                         }

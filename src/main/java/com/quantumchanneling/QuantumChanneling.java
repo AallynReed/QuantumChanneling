@@ -10,6 +10,7 @@ import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import com.quantumchanneling.blockentity.PhotonReceiverBlockEntity;
 import com.quantumchanneling.blockentity.PhotonStorageBlockEntity;
 import com.quantumchanneling.item.PhotonBlockItem;
+import com.quantumchanneling.item.PhotonShaderBlockItem;
 import com.quantumchanneling.item.TooltipItem;
 import com.quantumchanneling.client.PhotonNodeScreen;
 import com.quantumchanneling.menu.PhotonNodeMenu;
@@ -87,7 +88,7 @@ public class QuantumChanneling {
                     .lightLevel(state -> hasAnyConnection(state) ? 7 : 3)));
 
     public static final RegistryObject<Item> PHOTON_EMITTER_ITEM = ITEMS.register("photon_emitter",
-            () -> new PhotonBlockItem(PHOTON_EMITTER.get(), new Item.Properties(),
+            () -> new PhotonShaderBlockItem(PHOTON_EMITTER.get(), new Item.Properties(),
                     "tooltip.quantumchanneling.photon_emitter"));
 
     public static final RegistryObject<Block> PHOTON_RECEIVER = BLOCKS.register("photon_receiver",
@@ -99,7 +100,7 @@ public class QuantumChanneling {
                     .lightLevel(state -> hasAnyConnection(state) ? 7 : 3)));
 
     public static final RegistryObject<Item> PHOTON_RECEIVER_ITEM = ITEMS.register("photon_receiver",
-            () -> new PhotonBlockItem(PHOTON_RECEIVER.get(), new Item.Properties(),
+            () -> new PhotonShaderBlockItem(PHOTON_RECEIVER.get(), new Item.Properties(),
                     "tooltip.quantumchanneling.photon_receiver"));
 
     // Photon Storage — five tiers (Copper / Iron / Gold / Diamond / Emerald). Capacities live in
@@ -119,7 +120,10 @@ public class QuantumChanneling {
                             catch (Exception e) { return 0; }
                         }),
                 tier));
-        ITEMS.register(id, () -> new PhotonBlockItem(block.get(), new Item.Properties(),
+        // Storages render the same shader effect as emitter/receiver, with a tier-specific accent
+        // color picked by PhotonAccent. PhotonShaderBlockItem encodes the "use BEWLR" decision in
+        // the subclass type so it survives the super-constructor timing trap.
+        ITEMS.register(id, () -> new PhotonShaderBlockItem(block.get(), new Item.Properties(),
                 "tooltip.quantumchanneling.photon_storage"));
         return block;
     }
@@ -145,7 +149,7 @@ public class QuantumChanneling {
                     .lightLevel(state -> 10)));
 
     public static final RegistryObject<Item> PHOTON_MANAGER_ITEM = ITEMS.register("photon_manager",
-            () -> new PhotonBlockItem(PHOTON_MANAGER.get(), new Item.Properties(),
+            () -> new PhotonShaderBlockItem(PHOTON_MANAGER.get(), new Item.Properties(),
                     "tooltip.quantumchanneling.photon_manager"));
 
     public static final RegistryObject<BlockEntityType<PhotonEmitterBlockEntity>> PHOTON_EMITTER_BE =
@@ -255,15 +259,21 @@ public class QuantumChanneling {
         }
 
         /**
-         * Bind the custom BlockEntityRenderer for emitter + receiver. The renderer draws the
-         * additive glow ball and the beams into connected faces; the baked block model provides
-         * only the dark containment shell + port frames around it.
+         * Bind the custom BlockEntityRenderer for every photon device. The renderer draws the
+         * black-hole + accretion shader on top of the baked block model; only the accent color
+         * varies between devices (see {@link com.quantumchanneling.client.render.PhotonAccent}).
+         * Emitter/receiver also render directional beams into their connected face ports —
+         * manager/storage skip beams because they don't route a directional flow.
          */
         @SubscribeEvent
         public static void onRegisterRenderers(net.minecraftforge.client.event.EntityRenderersEvent.RegisterRenderers event) {
             event.registerBlockEntityRenderer(PHOTON_EMITTER_BE.get(),
                     ctx -> new com.quantumchanneling.client.render.PhotonNodeRenderer<>(ctx));
             event.registerBlockEntityRenderer(PHOTON_RECEIVER_BE.get(),
+                    ctx -> new com.quantumchanneling.client.render.PhotonNodeRenderer<>(ctx));
+            event.registerBlockEntityRenderer(PHOTON_MANAGER_BE.get(),
+                    ctx -> new com.quantumchanneling.client.render.PhotonNodeRenderer<>(ctx));
+            event.registerBlockEntityRenderer(PHOTON_STORAGE_BE.get(),
                     ctx -> new com.quantumchanneling.client.render.PhotonNodeRenderer<>(ctx));
         }
 

@@ -158,6 +158,10 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         ResourceMode(String label, int color, String labelKey, boolean visible) {
             this.label = label; this.color = color; this.labelKey = labelKey; this.visible = visible;
         }
+        /** Bridge to the server-side enum. Names match across both, so this is a pure relabel. */
+        public com.quantumchanneling.channel.ResourceMode toChannelMode() {
+            return com.quantumchanneling.channel.ResourceMode.valueOf(name());
+        }
     }
 
     private Tab activeTab = Tab.STATUS;
@@ -1169,13 +1173,14 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         cy = drawChInfoFormatted(gfx, contentX, cy,
                 "gui.quantumchanneling.channel.members", currentChannel.memberCount());
 
-        // Rates — the lang keys carry two %s slots (FE/t, FE/s).
-        int totalIn = currentChannel.totalInputRate();
+        // Rates — per-mode totals with units that match what the player is viewing.
+        String modeSuffix = activeMode.name().toLowerCase();
+        int totalIn = currentChannel.totalInputFor(activeMode.toChannelMode());
         cy = drawChInfoFormatted(gfx, contentX, cy,
-                "gui.quantumchanneling.stats.total_input", totalIn, totalIn * 20);
-        int totalOut = currentChannel.totalOutputRate();
+                "gui.quantumchanneling.stats.total_input." + modeSuffix, totalIn, totalIn * 20);
+        int totalOut = currentChannel.totalOutputFor(activeMode.toChannelMode());
         cy = drawChInfoFormatted(gfx, contentX, cy,
-                "gui.quantumchanneling.stats.total_output", totalOut, totalOut * 20);
+                "gui.quantumchanneling.stats.total_output." + modeSuffix, totalOut, totalOut * 20);
 
         // Energy / items / fluids / gas each render their own summary block. Heat stays in the
         // "coming soon" placeholder until the thermal-wire design is finished.
@@ -1590,9 +1595,25 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             gfx.drawString(font, Component.translatable("gui.quantumchanneling.storage.stored",
                             formatFE(stored), formatFE(capacity), pct), cx, infoY, 0xC8E0FF, false);
         } else {
-            int throughput = menu.getThroughput();
-            gfx.drawString(font, Component.translatable("gui.quantumchanneling.throughput",
-                    throughput, throughput * 20), cx, infoY, 0xC8E0FF, false);
+            // Per-mode throughput line — units match the resource the player is viewing. The
+            // emitter and receiver block entities feed four separate counters; the menu exposes
+            // the right one for the active mode. HEAT prints a "(unavailable)" placeholder since
+            // the heat pipeline isn't shipped.
+            int throughput = menu.getThroughputFor(activeMode.toChannelMode());
+            String tkey = "gui.quantumchanneling.throughput." + activeMode.name().toLowerCase();
+            gfx.drawString(font, Component.translatable(tkey, throughput, throughput * 20),
+                    cx, infoY, 0xC8E0FF, false);
+            // Loop warning — only emitters set this; it lingers for a few seconds after the last
+            // detection. We push the line up close so the user can't miss it.
+            if (menu.isLoopWarning()) {
+                gfx.drawString(font,
+                        Component.translatable("gui.quantumchanneling.loop.warning"),
+                        cx, infoY + 12, 0xFFFF6060, false);
+                gfx.drawString(font,
+                        Component.translatable("gui.quantumchanneling.loop.warning.hint")
+                                .withStyle(ChatFormatting.GRAY),
+                        cx, infoY + 24, 0xFFAAAAAA, false);
+            }
         }
 
         // Field labels above the cap / priority inputs. The build-side offsets are:
@@ -2146,14 +2167,17 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         }
         y += btnH + 3;
 
-        // Line graph.
+        // Line graph. Currently sourced from the FE history bank — items/fluids/gas have their
+        // own histories on the BE but aren't wired to the ContainerData graph slots yet; the
+        // Instant line below already uses the per-mode counter so the live number is correct.
         renderStatsGraph(gfx, cx, y, rw, 50);
         y += 50 + 3;
 
-        // Instant FE/t • FE/s.
-        int throughput = menu.getThroughput();
-        gfx.drawString(font, Component.translatable("gui.quantumchanneling.stats.instant",
-                throughput, throughput * 20), cx, y, 0xC8E0FF, false);
+        // Instant — per-mode counter with the unit that matches activeMode.
+        int throughput = menu.getThroughputFor(activeMode.toChannelMode());
+        String ikey = "gui.quantumchanneling.stats.instant." + activeMode.name().toLowerCase();
+        gfx.drawString(font, Component.translatable(ikey, throughput, throughput * 20),
+                cx, y, 0xC8E0FF, false);
         y += 14;
         return y;
     }

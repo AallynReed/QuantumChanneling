@@ -2,9 +2,7 @@ package com.quantumchanneling.block;
 
 import com.quantumchanneling.blockentity.PhotonManagerBlockEntity;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -20,7 +18,6 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.network.NetworkHooks;
 import org.jetbrains.annotations.Nullable;
-import org.joml.Vector3f;
 
 /**
  * Photon Manager — a passive gate that, when present on a channel and loaded, enables wireless
@@ -40,23 +37,10 @@ public class PhotonManagerBlock extends Block implements EntityBlock {
         return SHAPE;
     }
 
-    /**
-     * Manager spawns more frequent particles than emitters/receivers — it's "always on" as the
-     * channel's brain. Alternates gold (control surface) and blue (brain core) for a richer feel.
-     */
-    @Override
-    public void animateTick(BlockState state, Level level, BlockPos pos, RandomSource random) {
-        if (random.nextInt(5) != 0) return;
-        boolean blueTint = random.nextBoolean();
-        Vector3f color = blueTint
-                ? new Vector3f(0.31f, 0.63f, 1.0f)        // manager core (blue brain)
-                : new Vector3f(1.0f, 0.82f, 0.50f);       // manager belt (gold control surface)
-        DustParticleOptions opts = new DustParticleOptions(color, 1.0f);
-        double x = pos.getX() + 0.5 + (random.nextDouble() - 0.5) * 0.6;
-        double y = pos.getY() + 0.5 + (random.nextDouble() - 0.5) * 0.5;
-        double z = pos.getZ() + 0.5 + (random.nextDouble() - 0.5) * 0.6;
-        level.addParticle(opts, x, y, z, 0, 0.02, 0);
-    }
+    // No animateTick — the BER (PhotonNodeRenderer) now provides the visual idle animation via
+    // the GLSL black-hole + accretion shader, with manager-specific gold accent color picked by
+    // PhotonAccent.colorFor. Dust particles would compete with the shader for visual attention
+    // and don't match the same visual language across the device family.
 
     @Override
     public VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {

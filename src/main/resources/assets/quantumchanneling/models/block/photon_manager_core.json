@@ -1,100 +1,82 @@
 {
+  "__comment": "Manager — eight corner containment cubes. The three gyroscope rings + central black-hole are rendered entirely by the shader (PhotonNodeRenderer / photon_gyroscope.fsh) so they can spin freely on three axes; voxels would lock the rings into static positions. The corner cubes read as 'containers of the power within' — small dark vaults at each vertex with gold emissive on the inside-facing edges, framing the open central volume where the rings + orb live.",
   "parent": "block/block",
   "textures": {
     "core":     "quantumchanneling:block/photon_core_dark",
-    "gold":     "quantumchanneling:block/photon_accent_gold",
-    "blue":     "quantumchanneling:block/photon_accent_blue",
+    "accent":   "quantumchanneling:block/photon_accent_gold",
     "particle": "quantumchanneling:block/photon_core_dark"
   },
   "elements": [
     {
-      "__comment": "glowing brain — 6×6×6 emissive blue core suspended inside the containment frame",
-      "from": [5, 5, 5], "to": [11, 11, 11],
+      "__comment": "NW-bottom corner container (-x, -y, -z). Inner-facing edges (south + east + up) emissive gold; outer edges dark.",
+      "from": [0, 0, 0], "to": [3, 3, 3],
       "faces": {
-        "down":  { "texture": "#blue", "emissivity": 15 }, "up":    { "texture": "#blue", "emissivity": 15 },
-        "north": { "texture": "#blue", "emissivity": 15 }, "south": { "texture": "#blue", "emissivity": 15 },
-        "east":  { "texture": "#blue", "emissivity": 15 }, "west":  { "texture": "#blue", "emissivity": 15 }
+        "down":  { "texture": "#core" }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#core" }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#core" }
       }
     },
     {
-      "__comment": "gold equator belt — full 16×16 ring at the orb's midline",
-      "from": [0, 7, 0], "to": [16, 9, 16],
+      "__comment": "NE-bottom corner (+x, -y, -z). Inner faces: south + west + up.",
+      "from": [13, 0, 0], "to": [16, 3, 3],
       "faces": {
-        "down":  { "texture": "#gold", "emissivity": 15 }, "up":    { "texture": "#gold", "emissivity": 15 },
-        "north": { "texture": "#gold", "emissivity": 15 }, "south": { "texture": "#gold", "emissivity": 15 },
-        "east":  { "texture": "#gold", "emissivity": 15 }, "west":  { "texture": "#gold", "emissivity": 15 }
+        "down":  { "texture": "#core" }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#core" }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#accent", "emissivity": 15 }
       }
     },
     {
-      "__comment": "dark vertical pillar — front-left, connects bottom plate to top plate",
-      "from": [1, 1, 1], "to": [3, 15, 3],
+      "__comment": "SW-bottom corner (-x, -y, +z). Inner faces: north + east + up.",
+      "from": [0, 0, 13], "to": [3, 3, 16],
       "faces": {
-        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
-        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+        "down":  { "texture": "#core" }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#core" },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#core" }
       }
     },
     {
-      "__comment": "dark vertical pillar — front-right",
-      "from": [13, 1, 1], "to": [15, 15, 3],
+      "__comment": "SE-bottom corner (+x, -y, +z). Inner faces: north + west + up.",
+      "from": [13, 0, 13], "to": [16, 3, 16],
       "faces": {
-        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
-        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+        "down":  { "texture": "#core" }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#accent", "emissivity": 15 }
       }
     },
     {
-      "__comment": "dark vertical pillar — back-left",
-      "from": [1, 1, 13], "to": [3, 15, 15],
+      "__comment": "NW-top corner (-x, +y, -z). Inner faces: south + east + down.",
+      "from": [0, 13, 0], "to": [3, 16, 3],
       "faces": {
-        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
-        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#core" }
       }
     },
     {
-      "__comment": "dark vertical pillar — back-right",
-      "from": [13, 1, 13], "to": [15, 15, 15],
+      "__comment": "NE-top corner (+x, +y, -z). Inner faces: south + west + down.",
+      "from": [13, 13, 0], "to": [16, 16, 3],
       "faces": {
-        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
-        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#accent", "emissivity": 15 }
       }
     },
     {
-      "__comment": "dark bottom plate",
-      "from": [1, 0, 1], "to": [15, 1, 15],
+      "__comment": "SW-top corner (-x, +y, +z). Inner faces: north + east + down.",
+      "from": [0, 13, 13], "to": [3, 16, 16],
       "faces": {
-        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
-        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
+        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#core" },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#core" },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#core" }
       }
     },
     {
-      "__comment": "dark top plate",
-      "from": [1, 15, 1], "to": [15, 16, 15],
+      "__comment": "SE-top corner (+x, +y, +z). Inner faces: north + west + down.",
+      "from": [13, 13, 13], "to": [16, 16, 16],
       "faces": {
-        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
-        "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
-      }
-    },
-    {
-      "__comment": "blue control panel inset on top — emissive readout",
-      "from": [4, 16, 4], "to": [12, 17, 12],
-      "faces": {
-        "down":  { "texture": "#blue", "emissivity": 15 }, "up":    { "texture": "#blue", "emissivity": 15 },
-        "north": { "texture": "#blue", "emissivity": 15 }, "south": { "texture": "#blue", "emissivity": 15 },
-        "east":  { "texture": "#blue", "emissivity": 15 }, "west":  { "texture": "#blue", "emissivity": 15 }
-      }
-    },
-    {
-      "__comment": "gold central dial on the front face — control input",
-      "from": [6, 9, 0], "to": [10, 13, 1],
-      "faces": {
-        "down":  { "texture": "#gold", "emissivity": 15 }, "up":    { "texture": "#gold", "emissivity": 15 },
-        "north": { "texture": "#gold", "emissivity": 15 }, "south": { "texture": "#gold", "emissivity": 15 },
-        "east":  { "texture": "#gold", "emissivity": 15 }, "west":  { "texture": "#gold", "emissivity": 15 }
+        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#core" },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#accent", "emissivity": 15 }
       }
     }
   ]

@@ -119,6 +119,10 @@ public final class ItemTransitHelper {
      * Routes {@code stack} through {@code emitter}. Returns the unaccepted remainder.
      * VOID consumes the whole stack (returns empty); REJECT returns it unchanged; ROUTE pushes
      * as many items as the receivers' adjacent inventories will accept and returns whatever didn't fit.
+     *
+     * <p>The capability-pushed entry point (hopper, AE2 import bus, etc.) has no concept of a
+     * "source block we pulled from," so loop detection is bypassed here. Loop detection only
+     * applies to {@link #pullFromAdjacentAndRoute}.
      */
     public static ItemStack route(ServerLevel level, PhotonEmitterBlockEntity emitter,
                                   QuantumChannel channel, ItemStack stack, boolean simulate) {
@@ -127,12 +131,13 @@ public final class ItemTransitHelper {
             case VOID: return ItemStack.EMPTY;
             case REJECT: return stack;
             case ROUTE: {
-                ItemStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, simulate);
+                ItemStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, simulate, null);
                 if (!simulate) {
                     int moved = stack.getCount() - leftover.getCount();
                     if (moved > 0) {
                         ItemSubchannel sub = emitter.itemSubchannel(d.subchannelId);
                         if (sub != null) sub.recordRouted(moved);
+                        emitter.recordItemsRouted(moved);
                     }
                 }
                 return leftover;
@@ -141,10 +146,21 @@ public final class ItemTransitHelper {
         }
     }
 
+    /**
+     * Pushes {@code stack} to the channel's subscribed receivers.
+     *
+     * @param sourceBlockPos The block this batch was pulled from, or {@code null} when the entry
+     *                       point was a capability push (no known source). When non-null, the push
+     *                       refuses to deliver back into a receiver-side inventory at the same
+     *                       position — that would be a same-block loop, and the user has explicitly
+     *                       asked the mod to halt + warn instead of churning items through the
+     *                       routing pipeline for no net movement.
+     */
     private static ItemStack pushToReceivers(MinecraftServer server,
                                              PhotonEmitterBlockEntity emitter,
                                              QuantumChannel channel,
-                                             UUID subchannelId, ItemStack stack, boolean simulate) {
+                                             UUID subchannelId, ItemStack stack, boolean simulate,
+                                             @Nullable BlockPos sourceBlockPos) {
         List<PhotonReceiverBlockEntity> targets = loadedReceiversFor(server, channel, subchannelId);
         if (targets.isEmpty()) return stack;
         targets = applyEmitterDispatch(emitter, targets, simulate);
@@ -155,11 +171,21 @@ public final class ItemTransitHelper {
             long key = rcv.getBlockPos().asLong();
             if (emitter.isItemReceiverCooledDown(key, now)) continue;
             int before = remaining.getCount();
-            remaining = pushToAdjacentInventory(rcv, remaining, simulate);
+            // Same-dimension check pairs with the BlockPos check below — a coincidentally-equal
+            // BlockPos in a different dimension is a totally different block and should still route.
+            boolean sameDimension = sourceBlockPos != null
+                    && emitter.getLevel() != null && rcv.getLevel() != null
+                    && emitter.getLevel().dimension().equals(rcv.getLevel().dimension());
+            BlockPos forbidden = sameDimension ? sourceBlockPos : null;
+            remaining = pushToAdjacentInventory(rcv, remaining, simulate, emitter, forbidden);
             if (!simulate) {
                 int delivered = before - remaining.getCount();
-                if (delivered > 0) emitter.clearItemReceiverCooldown(key);
-                else               emitter.markItemReceiverRejected(key, now);
+                if (delivered > 0) {
+                    emitter.clearItemReceiverCooldown(key);
+                    rcv.recordItemsRouted(delivered);
+                } else {
+                    emitter.markItemReceiverRejected(key, now);
+                }
             }
         }
         return remaining;
@@ -184,6 +210,18 @@ public final class ItemTransitHelper {
      * ROUND_ROBIN rotates the starting side so reach-fills spread out over many ticks.
      */
     public static ItemStack pushToAdjacentInventory(ChannelBoundBlockEntity origin, ItemStack stack, boolean simulate) {
+        return pushToAdjacentInventory(origin, stack, simulate, null, null);
+    }
+
+    /**
+     * Loop-aware push. If {@code forbiddenPos} matches a candidate neighbor block, the push skips
+     * that neighbor and marks {@code reportingEmitter} (when non-null) so the UI surfaces a "loop
+     * detected" warning. Both args are ignored when null — they're the same-block-as-pull-source
+     * fast-path; callers that don't have a source (capability pushes) just pass nulls.
+     */
+    public static ItemStack pushToAdjacentInventory(ChannelBoundBlockEntity origin, ItemStack stack, boolean simulate,
+                                                    @Nullable PhotonEmitterBlockEntity reportingEmitter,
+                                                    @Nullable BlockPos forbiddenPos) {
         if (stack.isEmpty()) return stack;
         var level = origin.getLevel();
         if (level == null) return stack;
@@ -197,7 +235,15 @@ public final class ItemTransitHelper {
             if (remaining.isEmpty()) break;
             Direction side = sides[(startIdx + i) % sides.length];
             if (!origin.isItemSideArmed(side)) continue;        // per-side mask gates push-sides
-            BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
+            BlockPos neighborPos = origin.getBlockPos().relative(side);
+            // Loop guard — refuse to push back into the block this batch was pulled from on the
+            // same channel. The emitter would just pull the same items out next tick: net zero,
+            // CPU non-zero. Mark the emitter so the UI lights the loop warning.
+            if (forbiddenPos != null && forbiddenPos.equals(neighborPos)) {
+                if (!simulate && reportingEmitter != null) reportingEmitter.markLoopDetected();
+                continue;
+            }
+            BlockEntity neighbor = level.getBlockEntity(neighborPos);
             if (neighbor == null) continue;
             IItemHandler dest = neighbor.getCapability(ForgeCapabilities.ITEM_HANDLER, side.getOpposite()).orElse(null);
             if (dest == null) continue;
@@ -223,18 +269,20 @@ public final class ItemTransitHelper {
         BlockPos origin = emitter.getBlockPos();
         for (Direction side : Direction.values()) {
             if (!emitter.isItemSideArmed(side)) continue;       // per-side mask gates pull-sides
-            BlockEntity neighbor = level.getBlockEntity(origin.relative(side));
+            BlockPos neighborPos = origin.relative(side);
+            BlockEntity neighbor = level.getBlockEntity(neighborPos);
             if (neighbor == null) continue;
             IItemHandler src = neighbor.getCapability(ForgeCapabilities.ITEM_HANDLER, side.getOpposite()).orElse(null);
             if (src == null) continue;
-            int moved = scanAndRoute(level, emitter, channel, src, budget);
+            int moved = scanAndRoute(level, emitter, channel, src, budget, neighborPos);
             if (moved > 0) return moved;
         }
         return 0;
     }
 
     private static int scanAndRoute(ServerLevel level, PhotonEmitterBlockEntity emitter,
-                                    QuantumChannel channel, IItemHandler src, int budget) {
+                                    QuantumChannel channel, IItemHandler src, int budget,
+                                    BlockPos sourceBlockPos) {
         for (int slot = 0; slot < src.getSlots(); slot++) {
             // Cheap empty check first. getStackInSlot is a direct read of the handler's internal
             // array — no allocation, no extraction logic. Saves the extract-simulate path on
@@ -248,18 +296,21 @@ public final class ItemTransitHelper {
                 case REJECT -> { continue; }
                 case VOID -> {
                     ItemStack taken = src.extractItem(slot, peek.getCount(), false);
-                    return taken.getCount();
+                    int moved = taken.getCount();
+                    if (moved > 0) emitter.recordItemsRouted(moved);
+                    return moved;
                 }
                 case ROUTE -> {
-                    ItemStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, true);
+                    ItemStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, true, sourceBlockPos);
                     int wouldMove = peek.getCount() - simulated.getCount();
                     if (wouldMove <= 0) continue;
                     ItemStack taken = src.extractItem(slot, wouldMove, false);
                     if (taken.isEmpty()) continue;
-                    ItemStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, false);
+                    ItemStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, false, sourceBlockPos);
                     if (!leftover.isEmpty()) src.insertItem(slot, leftover, false);
                     int moved = taken.getCount() - leftover.getCount();
                     if (moved > 0) {
+                        emitter.recordItemsRouted(moved);
                         ItemSubchannel sub = emitter.itemSubchannel(d.subchannelId);
                         if (sub != null) {
                             sub.recordRouted(moved);

@@ -31,8 +31,16 @@ public record ChannelInfo(
         boolean subscribed,
         int emitterCount,
         int receiverCount,
+        /** Energy totals — sum of every loaded emitter / receiver's FE/t last tick. */
         int totalInputRate,
         int totalOutputRate,
+        /** Per-resource totals. Items in stack count/t; fluids and gas in mB/t. */
+        int totalInputItems,
+        int totalOutputItems,
+        int totalInputFluids,
+        int totalOutputFluids,
+        int totalInputGas,
+        int totalOutputGas,
         int color,
         boolean hasPin,
         /** Only populated when the viewer is an admin — empty otherwise. */
@@ -269,6 +277,27 @@ public record ChannelInfo(
     public boolean charges(int slotBit) { return ChargingSlots.has(chargingSlots, slotBit); }
     public boolean chargesAnything()    { return ChargingSlots.any(chargingSlots); }
 
+    /** Channel-wide input total for the given resource mode. ENERGY → FE/t, ITEMS → stacks/t,
+     *  FLUIDS / GASES → mB/t, HEAT → 0 (pipeline not shipped). */
+    public int totalInputFor(com.quantumchanneling.channel.ResourceMode mode) {
+        return switch (mode) {
+            case ITEMS  -> totalInputItems;
+            case FLUIDS -> totalInputFluids;
+            case GASES  -> totalInputGas;
+            case HEAT   -> 0;
+            default     -> totalInputRate;
+        };
+    }
+    public int totalOutputFor(com.quantumchanneling.channel.ResourceMode mode) {
+        return switch (mode) {
+            case ITEMS  -> totalOutputItems;
+            case FLUIDS -> totalOutputFluids;
+            case GASES  -> totalOutputGas;
+            case HEAT   -> 0;
+            default     -> totalOutputRate;
+        };
+    }
+
     public void write(FriendlyByteBuf buf) {
         buf.writeUUID(id);
         buf.writeUtf(name);
@@ -284,6 +313,12 @@ public record ChannelInfo(
         buf.writeVarInt(receiverCount);
         buf.writeVarInt(totalInputRate);
         buf.writeVarInt(totalOutputRate);
+        buf.writeVarInt(totalInputItems);
+        buf.writeVarInt(totalOutputItems);
+        buf.writeVarInt(totalInputFluids);
+        buf.writeVarInt(totalOutputFluids);
+        buf.writeVarInt(totalInputGas);
+        buf.writeVarInt(totalOutputGas);
         buf.writeInt(color);
         buf.writeBoolean(hasPin);
         buf.writeUtf(pin, 32);
@@ -323,6 +358,12 @@ public record ChannelInfo(
         int receiverCount = buf.readVarInt();
         int totalIn = buf.readVarInt();
         int totalOut = buf.readVarInt();
+        int totalInItems  = buf.readVarInt();
+        int totalOutItems = buf.readVarInt();
+        int totalInFluids  = buf.readVarInt();
+        int totalOutFluids = buf.readVarInt();
+        int totalInGas  = buf.readVarInt();
+        int totalOutGas = buf.readVarInt();
         int color = buf.readInt();
         boolean hasPin = buf.readBoolean();
         String pin = buf.readUtf(32);
@@ -348,7 +389,9 @@ public record ChannelInfo(
         GasChannelConfig gcfg = GasChannelConfig.read(buf);
         HeatChannelConfig hcfg = HeatChannelConfig.read(buf);
         return new ChannelInfo(id, name, owner, ownerName, members, canManage, isPublic, slots, subscribed,
-                emitterCount, receiverCount, totalIn, totalOut, color, hasPin, pin, canUse,
+                emitterCount, receiverCount, totalIn, totalOut,
+                totalInItems, totalOutItems, totalInFluids, totalOutFluids, totalInGas, totalOutGas,
+                color, hasPin, pin, canUse,
                 sh, sho, si, sa, sc, armorPr, ps, ms, cnow, icfg, fcfg, gcfg, hcfg);
     }
 
@@ -369,6 +412,9 @@ public record ChannelInfo(
         List<MemberPos> ms = new ArrayList<>();
         int emitterCount = 0, receiverCount = 0;
         int totalIn = 0, totalOut = 0;
+        int totalInItems = 0, totalOutItems = 0;
+        int totalInFluids = 0, totalOutFluids = 0;
+        int totalInGas = 0, totalOutGas = 0;
         for (GlobalPos gp : net.members()) {
             String dim = gp.dimension().location().toString();
             long packed = gp.pos().asLong();
@@ -416,6 +462,9 @@ public record ChannelInfo(
                 }
                 if (be instanceof PhotonEmitterBlockEntity em) {
                     type = TYPE_EMITTER; emitterCount++; rate = em.getLastTickThroughput(); totalIn += rate;
+                    totalInItems  += em.getLastTickItems();
+                    totalInFluids += em.getLastTickFluids();
+                    totalInGas    += em.getLastTickGas();
                     voidFilterCopy.copyFrom(em.voidFilter());
                     fluidVoidFilterCopy.copyFrom(em.fluidVoidFilter());
                     gasVoidFilterCopy.copyFrom(em.gasVoidFilter());
@@ -424,6 +473,9 @@ public record ChannelInfo(
                     gasHosted.addAll(em.gasSubchannels());
                 } else if (be instanceof PhotonReceiverBlockEntity rc) {
                     type = TYPE_RECEIVER; receiverCount++; rate = rc.getLastTickThroughput(); totalOut += rate;
+                    totalOutItems  += rc.getLastTickItems();
+                    totalOutFluids += rc.getLastTickFluids();
+                    totalOutGas    += rc.getLastTickGas();
                 } else if (be instanceof PhotonStorageBlockEntity st) {
                     type = TYPE_STORAGE;
                     rate = (int) Math.min(st.getStored(), (long) Integer.MAX_VALUE);
@@ -478,7 +530,9 @@ public record ChannelInfo(
                 net.id(), net.name(), net.ownerId(), net.ownerName(),
                 net.memberCount(), canManage,
                 net.isPublic(), net.chargingSlots(), subscribed,
-                emitterCount, receiverCount, totalIn, totalOut, net.color(),
+                emitterCount, receiverCount, totalIn, totalOut,
+                totalInItems, totalOutItems, totalInFluids, totalOutFluids, totalInGas, totalOutGas,
+                net.color(),
                 net.hasPin(), pinForViewer, canUse,
                 net.slotPriority(ChargingSlots.HAND),
                 net.slotPriority(ChargingSlots.HOTBAR),

@@ -2,7 +2,6 @@ package com.quantumchanneling.client.render;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
-import com.quantumchanneling.QuantumChanneling;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.BlockEntityWithoutLevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
@@ -10,28 +9,28 @@ import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
+import com.quantumchanneling.block.PhotonManagerBlock;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 
 /**
- * BlockEntityWithoutLevelRenderer for the emitter and receiver items. Mirrors the
- * {@link PhotonNodeRenderer} server-side BER: renders the baked block model first (the dark shell
- * + corner posts) then overlays the same GLSL halo + dark-void shaders on top. This way the
- * black-hole + accretion effect is visible in the hotbar, inventory slot, item frame, hand, and
- * dropped form — not just in the world.
+ * BlockEntityWithoutLevelRenderer for every photon device item — emitter, receiver, manager, and
+ * the five storage tiers. Mirrors the {@link PhotonNodeRenderer} server-side BER: renders the
+ * baked block model first (the dark shell + corner posts) then overlays the same GLSL halo +
+ * dark-void shaders on top. The black-hole + accretion effect is visible in the hotbar, inventory
+ * slot, item frame, hand, and dropped form — not just in the world.
+ *
+ * <p>The accent color comes from {@link PhotonAccent} so the in-world and item visuals always
+ * stay in sync; updating a tier color in one place updates it everywhere.
  *
  * <p>The shader uses a camera-facing billboard which would normally look correct only when the
  * world camera is set up. For item rendering Minecraft establishes a per-transform orientation
  * (e.g. inventory items rotate to a standard isometric view); the camera-orientation quaternion
- * is still defined and produces a plausibly-oriented billboard. Beams aren't drawn — they only
- * make sense on a placed device with connected neighbors.
+ * is still defined and produces a plausibly-oriented billboard. Beams aren't drawn here — they
+ * only make sense on a placed emitter/receiver with connected neighbors.
  */
 public class PhotonItemRenderer extends BlockEntityWithoutLevelRenderer {
     public static final PhotonItemRenderer INSTANCE = new PhotonItemRenderer();
-
-    /** Same accent colors as the BER. Blue for emitter, red for receiver. */
-    private static final int EMITTER_RGB  = 0x4FA0FF;
-    private static final int RECEIVER_RGB = 0xFF5560;
 
     /** Sized identically to the BER quads so the in-world and item visuals match. */
     private static final float HALO_QUAD_HALF = 0.32f;
@@ -55,8 +54,7 @@ public class PhotonItemRenderer extends BlockEntityWithoutLevelRenderer {
                 .renderSingleBlock(state, pose, buffer, packedLight, packedOverlay);
 
         // 2) Render the shader effect on top — same halo + void passes as the BER.
-        boolean isEmitter = stack.is(QuantumChanneling.PHOTON_EMITTER_ITEM.get());
-        int rgb = isEmitter ? EMITTER_RGB : RECEIVER_RGB;
+        int rgb = PhotonAccent.colorFor(blockItem.getBlock());
         int r = (rgb >> 16) & 0xFF;
         int g = (rgb >> 8) & 0xFF;
         int b = rgb & 0xFF;
@@ -67,9 +65,32 @@ public class PhotonItemRenderer extends BlockEntityWithoutLevelRenderer {
         VertexConsumer halo = buffer.getBuffer(PhotonRenderTypes.PHOTON_HALO);
         drawShadedBillboard(pose, halo, HALO_QUAD_HALF, r, g, b, 255, 0.0f);
 
-        // Flush halo before drawing the void so the dark center overlays the bright halo.
+        // Manager items get the gyroscope rings + corner-vault lightning bolts on top of the
+        // halo. Inventory rendering doesn't have a smooth GameTime feed but the shader reads
+        // from the global GameTime uniform so the visuals animate continuously even when the
+        // item is in a slot. The Java-side tumble uses the level's gameTime when present, else 0
+        // so dropped items + JEI previews still show motion via the shader's internal clocks.
+        boolean isManager = blockItem.getBlock() instanceof PhotonManagerBlock;
+        if (isManager) {
+            VertexConsumer gyro = buffer.getBuffer(PhotonRenderTypes.PHOTON_GYROSCOPE);
+            long gameTime = (Minecraft.getInstance().level != null)
+                    ? Minecraft.getInstance().level.getGameTime() : 0L;
+            float partial = Minecraft.getInstance().getFrameTime();
+            PhotonNodeRenderer.renderGyroscope(pose, gyro,
+                    0xFF, 0xD8, 0x60, gameTime, partial);
+
+            VertexConsumer bolt = buffer.getBuffer(PhotonRenderTypes.PHOTON_BOLT);
+            PhotonNodeRenderer.renderCornerBolts(pose, bolt, 0xB0, 0x7B, 0xFF);
+        }
+
+        // Flush halo (and the manager extras when present) before drawing the void so the dark
+        // center overlays the bright halo, the gyroscope rings, and the bolts' inner endpoints.
         if (buffer instanceof MultiBufferSource.BufferSource bs) {
             bs.endBatch(PhotonRenderTypes.PHOTON_HALO);
+            if (isManager) {
+                bs.endBatch(PhotonRenderTypes.PHOTON_GYROSCOPE);
+                bs.endBatch(PhotonRenderTypes.PHOTON_BOLT);
+            }
         }
 
         int voidR = clampByte((int) (r * 0.10f) + 4);
