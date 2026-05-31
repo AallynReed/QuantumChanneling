@@ -139,6 +139,7 @@
   "gui.quantumchanneling.channel.info.no_active_charging": "Nothing is being charged right now.",
   "gui.quantumchanneling.channel.info.charge_slot_row": "↳ %s — %s FE/t",
   "gui.quantumchanneling.channel.info.charging_header": "Charging slots",
+  "gui.quantumchanneling.charge.locked_by_server": "✕ Locked by server",
   "gui.quantumchanneling.dispatch.label":       "Dispatch: %s",
   "gui.quantumchanneling.dispatch.serve_first": "Serve first",
   "gui.quantumchanneling.dispatch.round_robin": "Round-robin",

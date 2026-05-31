@@ -14,6 +14,9 @@ public final class ClientServerConfig {
 
     public static boolean allowCrossDimension = true;
 
+    /** Storage tier capacities (index = tier - 1). Defaults match ServerConfig's defaults. */
+    public static long[] storageCapacities = new long[]{ 1L << 16, 1L << 20, 1L << 24, 1L << 28, 1L << 32 };
+
     public static boolean itemsRoutingEnabled    = true;
     public static int     itemsMaxBatch          = 500;
     public static int     itemsMaxSubsPerEmitter = 3;
@@ -40,4 +43,36 @@ public final class ClientServerConfig {
     public static boolean slotInventoryEnabled = true;
     public static boolean slotArmorEnabled     = true;
     public static boolean slotCuriosEnabled    = true;
+
+    /**
+     * Copy the current local {@link com.quantumchanneling.ServerConfig} values into this mirror.
+     * Used after the client logs out of a server so the UI stops showing the (now-irrelevant)
+     * remote server's caps and reverts to whatever the player has in their own toml.
+     */
+    public static void applyFromLocal() {
+        allowCrossDimension     = com.quantumchanneling.ServerConfig.allowCrossDimension;
+        storageCapacities       = com.quantumchanneling.ServerConfig.storageCapacities;
+        itemsRoutingEnabled     = com.quantumchanneling.ServerConfig.itemsRoutingEnabled;
+        itemsMaxBatch           = com.quantumchanneling.ServerConfig.itemsMaxBatch;
+        itemsMaxSubsPerEmitter  = com.quantumchanneling.ServerConfig.itemsMaxSubsPerEmitter;
+        itemsMaxSubsPerReceiver = com.quantumchanneling.ServerConfig.itemsMaxSubsPerReceiver;
+        itemsMaxSubsPerChannel  = com.quantumchanneling.ServerConfig.itemsMaxSubsPerChannel;
+        fluidsRoutingEnabled    = com.quantumchanneling.ServerConfig.fluidsRoutingEnabled;
+        fluidsMaxBatch          = com.quantumchanneling.ServerConfig.fluidsMaxBatch;
+        fluidsMaxSubsPerEmitter = com.quantumchanneling.ServerConfig.fluidsMaxSubsPerEmitter;
+        fluidsMaxSubsPerReceiver = com.quantumchanneling.ServerConfig.fluidsMaxSubsPerReceiver;
+        fluidsMaxSubsPerChannel = com.quantumchanneling.ServerConfig.fluidsMaxSubsPerChannel;
+        gasesRoutingEnabled     = com.quantumchanneling.ServerConfig.gasesRoutingEnabled;
+        gasesMaxBatch           = com.quantumchanneling.ServerConfig.gasesMaxBatch;
+        gasesMaxSubsPerEmitter  = com.quantumchanneling.ServerConfig.gasesMaxSubsPerEmitter;
+        gasesMaxSubsPerReceiver = com.quantumchanneling.ServerConfig.gasesMaxSubsPerReceiver;
+        gasesMaxSubsPerChannel  = com.quantumchanneling.ServerConfig.gasesMaxSubsPerChannel;
+        heatRoutingEnabled      = com.quantumchanneling.ServerConfig.heatRoutingEnabled;
+        wirelessEnabled         = com.quantumchanneling.ServerConfig.wirelessEnabled;
+        slotHandEnabled         = com.quantumchanneling.ServerConfig.slotHandEnabled;
+        slotHotbarEnabled       = com.quantumchanneling.ServerConfig.slotHotbarEnabled;
+        slotInventoryEnabled    = com.quantumchanneling.ServerConfig.slotInventoryEnabled;
+        slotArmorEnabled        = com.quantumchanneling.ServerConfig.slotArmorEnabled;
+        slotCuriosEnabled       = com.quantumchanneling.ServerConfig.slotCuriosEnabled;
+    }
 }

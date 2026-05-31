@@ -1,6 +1,5 @@
 package com.quantumchanneling.item;
 
-import com.quantumchanneling.Config;
 import com.quantumchanneling.block.PhotonStorageBlock;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
@@ -32,7 +31,7 @@ public class PhotonBlockItem extends BlockItem {
         tooltip.add(Component.translatable(descriptionKey).withStyle(ChatFormatting.GRAY));
         if (getBlock() instanceof PhotonStorageBlock psb) {
             int tier = psb.getTier();
-            long[] caps = Config.storageCapacities;
+            long[] caps = com.quantumchanneling.client.ClientServerConfig.storageCapacities;
             long cap = (caps != null && tier - 1 < caps.length) ? caps[tier - 1] : 0L;
             String formatted = formatFE(cap);
             tooltip.add(Component.translatable("tooltip.quantumchanneling.storage.capacity", formatted)

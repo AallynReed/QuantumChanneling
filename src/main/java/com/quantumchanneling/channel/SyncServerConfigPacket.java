@@ -19,6 +19,7 @@ import java.util.function.Supplier;
  */
 public record SyncServerConfigPacket(
         boolean allowCrossDimension,
+        long storageT1, long storageT2, long storageT3, long storageT4, long storageT5,
         boolean itemsEnabled,  int itemsMaxBatch,  int itemsPerEmitter,  int itemsPerReceiver,  int itemsPerChannel,
         boolean fluidsEnabled, int fluidsMaxBatch, int fluidsPerEmitter, int fluidsPerReceiver, int fluidsPerChannel,
         boolean gasesEnabled,  int gasesMaxBatch,  int gasesPerEmitter,  int gasesPerReceiver,  int gasesPerChannel,
@@ -27,8 +28,10 @@ public record SyncServerConfigPacket(
         boolean slotHand, boolean slotHotbar, boolean slotInventory, boolean slotArmor, boolean slotCurios
 ) {
     public static SyncServerConfigPacket snapshot() {
+        long[] caps = ServerConfig.storageCapacities;
         return new SyncServerConfigPacket(
                 ServerConfig.allowCrossDimension,
+                caps[0], caps[1], caps[2], caps[3], caps[4],
                 ServerConfig.itemsRoutingEnabled,  ServerConfig.itemsMaxBatch,
                 ServerConfig.itemsMaxSubsPerEmitter, ServerConfig.itemsMaxSubsPerReceiver, ServerConfig.itemsMaxSubsPerChannel,
                 ServerConfig.fluidsRoutingEnabled, ServerConfig.fluidsMaxBatch,
@@ -43,6 +46,8 @@ public record SyncServerConfigPacket(
 
     public static void encode(SyncServerConfigPacket p, FriendlyByteBuf b) {
         b.writeBoolean(p.allowCrossDimension);
+        b.writeLong(p.storageT1); b.writeLong(p.storageT2); b.writeLong(p.storageT3);
+        b.writeLong(p.storageT4); b.writeLong(p.storageT5);
         b.writeBoolean(p.itemsEnabled);  b.writeVarInt(p.itemsMaxBatch);
         b.writeVarInt(p.itemsPerEmitter); b.writeVarInt(p.itemsPerReceiver); b.writeVarInt(p.itemsPerChannel);
         b.writeBoolean(p.fluidsEnabled); b.writeVarInt(p.fluidsMaxBatch);
@@ -58,6 +63,7 @@ public record SyncServerConfigPacket(
     public static SyncServerConfigPacket decode(FriendlyByteBuf b) {
         return new SyncServerConfigPacket(
                 b.readBoolean(),
+                b.readLong(), b.readLong(), b.readLong(), b.readLong(), b.readLong(),
                 b.readBoolean(), b.readVarInt(),
                 b.readVarInt(), b.readVarInt(), b.readVarInt(),
                 b.readBoolean(), b.readVarInt(),
@@ -78,6 +84,8 @@ public record SyncServerConfigPacket(
 
     private static void applyClient(SyncServerConfigPacket p) {
         ClientServerConfig.allowCrossDimension     = p.allowCrossDimension;
+        ClientServerConfig.storageCapacities       = new long[]{
+                p.storageT1, p.storageT2, p.storageT3, p.storageT4, p.storageT5 };
         ClientServerConfig.itemsRoutingEnabled     = p.itemsEnabled;
         ClientServerConfig.itemsMaxBatch           = p.itemsMaxBatch;
         ClientServerConfig.itemsMaxSubsPerEmitter  = p.itemsPerEmitter;

@@ -1,7 +1,7 @@
 package com.quantumchanneling.blockentity;
 
-import com.quantumchanneling.Config;
 import com.quantumchanneling.QuantumChanneling;
+import com.quantumchanneling.ServerConfig;
 import com.quantumchanneling.menu.PhotonNodeMenu;
 import com.quantumchanneling.channel.ChannelData;
 import com.quantumchanneling.channel.FluidChannelConfig;
@@ -84,7 +84,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     private final IEnergyStorage energyIO = new IEnergyStorage() {
         @Override
         public int receiveEnergy(int maxReceive, boolean simulate) {
-            int budget = effectiveBudget(Config.emitterPushRate);
+            int budget = effectiveBudget(ServerConfig.emitterPushRate);
             int cap = Math.max(0, budget - forwardedThisTick);
             int amount = Math.min(maxReceive, cap);
             if (amount <= 0) return 0;
@@ -94,7 +94,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         }
         @Override public int extractEnergy(int max, boolean s) { return 0; }
         @Override public int getEnergyStored() { return 0; }
-        @Override public int getMaxEnergyStored() { return effectiveBudget(Config.emitterPushRate); }
+        @Override public int getMaxEnergyStored() { return effectiveBudget(ServerConfig.emitterPushRate); }
         @Override public boolean canExtract() { return false; }
         @Override public boolean canReceive() { return true; }
     };
@@ -594,7 +594,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
      */
     public int pullForExternal(int want) {
         if (!(level instanceof ServerLevel) || want <= 0) return 0;
-        int budget = effectiveBudget(Config.emitterPushRate) - forwardedThisTick;
+        int budget = effectiveBudget(ServerConfig.emitterPushRate) - forwardedThisTick;
         if (budget <= 0) return 0;
         int target = Math.min(want, budget);
         int collected = 0;
@@ -639,7 +639,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         // no static-field reads inside the method body, nothing.
         if (com.quantumchanneling.client.Compat.mekanismLoaded()) tickGasAndHeat(level);
 
-        int budget = effectiveBudget(Config.emitterPushRate);
+        int budget = effectiveBudget(ServerConfig.emitterPushRate);
         for (Direction side : Direction.values()) {
             int rem = budget - forwardedThisTick;
             if (rem <= 0) break;

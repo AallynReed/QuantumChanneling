@@ -58,6 +58,38 @@ public class ChannelData extends SavedData {
                 .computeIfAbsent(ChannelData::load, ChannelData::new, NAME);
     }
 
+    /**
+     * Walks every channel and clears any charging-slot bits that the current server config
+     * disables. Runs at server startup and on config reload, so admin-disabled slots stay
+     * disabled on existing channels across restarts — a later re-enable in the config requires
+     * users to re-opt-in per channel instead of having stale state quietly resume.
+     */
+    public void applyChargingSlotConfig() {
+        int forbiddenMask;
+        if (!com.quantumchanneling.ServerConfig.wirelessEnabled) {
+            forbiddenMask = ChargingSlots.ALL_MASK;
+        } else {
+            int m = 0;
+            if (!com.quantumchanneling.ServerConfig.slotHandEnabled)      m |= ChargingSlots.HAND;
+            if (!com.quantumchanneling.ServerConfig.slotHotbarEnabled)    m |= ChargingSlots.HOTBAR;
+            if (!com.quantumchanneling.ServerConfig.slotInventoryEnabled) m |= ChargingSlots.INVENTORY;
+            if (!com.quantumchanneling.ServerConfig.slotArmorEnabled)     m |= ChargingSlots.ARMOR;
+            if (!com.quantumchanneling.ServerConfig.slotCuriosEnabled)    m |= ChargingSlots.CURIOS;
+            forbiddenMask = m;
+        }
+        if (forbiddenMask == 0) return;
+        boolean dirty = false;
+        for (QuantumChannel net : networks.values()) {
+            int cur = net.chargingSlots();
+            int clean = cur & ~forbiddenMask;
+            if (clean != cur) {
+                net.setChargingSlots(clean);
+                dirty = true;
+            }
+        }
+        if (dirty) setDirty();
+    }
+
     /* ---- channel lifecycle ---- */
 
     public QuantumChannel createChannel(ServerPlayer owner, String name) {

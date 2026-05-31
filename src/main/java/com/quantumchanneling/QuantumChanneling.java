@@ -209,8 +209,12 @@ public class QuantumChanneling {
             LOGGER.info("Quantum Channeling: Mekanism detected — gas + heat caps active.");
         }
 
-        context.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
-        context.registerConfig(ModConfig.Type.SERVER, ServerConfig.SPEC);
+        // COMMON type so the file lives at config/quantumchanneling-common.toml — locally editable
+        // with any text editor, applies to single-player by default. On multiplayer the dedicated
+        // server has its OWN copy of this file; clients receive the server's values via
+        // SyncServerConfigPacket on join (overriding the client's local mirror), and on logout
+        // ServerConfigSync re-applies the local values so single-player picks up where you left off.
+        context.registerConfig(ModConfig.Type.COMMON, ServerConfig.SPEC);
 
         // Validate forced-chunk tickets on world load. Keep all of them — owning BlockEntities
         // re-sync their own ticket state on onLoad(), which cleans up any orphan in either direction.
@@ -221,13 +225,20 @@ public class QuantumChanneling {
 
     private void commonSetup(final FMLCommonSetupEvent event) {
         event.enqueueWork(ModMessages::register);
-        LOGGER.info("Quantum Channeling: common setup complete (emitter push = {} FE/t, receiver out = {} FE/t, cross-dim = {})",
-                Config.emitterPushRate, Config.receiverOutputRate, ServerConfig.allowCrossDimension);
+        LOGGER.info("Quantum Channeling: common setup complete (settings are server-config; values applied on world load).");
     }
 
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         LOGGER.info("Quantum Channeling: server starting");
+    }
+
+    @SubscribeEvent
+    public void onServerStarted(net.minecraftforge.event.server.ServerStartedEvent event) {
+        // Apply server-side charging disables to every saved channel now that the overworld
+        // is available. Persists across restarts: if an admin disables slot X, every channel's
+        // mask gets X cleared once, the SavedData is marked dirty, and the change survives.
+        ChannelData.get(event.getServer()).applyChargingSlotConfig();
     }
 
     @SubscribeEvent

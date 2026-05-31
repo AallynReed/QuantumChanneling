@@ -9,10 +9,11 @@ import net.minecraftforge.fml.common.Mod;
 import net.minecraftforge.fml.event.config.ModConfigEvent;
 
 /**
- * Server-authoritative settings. Lives at {@code world/serverconfig/quantumchanneling-server.toml}
- * on a dedicated server and inside the world folder for single-player. Admins use this to disable
- * whole pipelines or clamp how much a single emitter is allowed to move per cycle, without
- * touching individual channel state.
+ * Mod-wide settings. Lives at {@code config/quantumchanneling-common.toml} (single-player or
+ * dedicated server), locally editable with any text editor. On multiplayer the dedicated server's
+ * copy of this file is authoritative — clients receive a snapshot via
+ * {@link com.quantumchanneling.channel.SyncServerConfigPacket} on join, and reverts to their own
+ * values when they disconnect.
  *
  * <p>The "max batch" settings act as a hard ceiling that emitters honor at read time — channels
  * can still be configured below the cap, but any user-set value above it is silently clamped on
@@ -27,6 +28,32 @@ public class ServerConfig {
     private static final ForgeConfigSpec.BooleanValue ALLOW_CROSS_DIMENSION = B
             .comment("Whether a quantum channel may link emitters and receivers across dimensions.")
             .define("world.allowCrossDimension", true);
+
+    /* ---- energy throughput ceilings ---- */
+
+    private static final ForgeConfigSpec.IntValue EMITTER_PUSH_RATE = B
+            .comment("Maximum FE a Photon Emitter pushes through its channel to receivers per tick.",
+                     "0 = unlimited.")
+            .defineInRange("energy.emitterPushRate", 0, 0, Integer.MAX_VALUE);
+
+    private static final ForgeConfigSpec.IntValue RECEIVER_OUTPUT_RATE = B
+            .comment("Maximum FE a Photon Receiver outputs to adjacent machines per tick.",
+                     "0 = unlimited.")
+            .defineInRange("energy.receiverOutputRate", 0, 0, Integer.MAX_VALUE);
+
+    /* ---- photon storage capacities (tier 1 .. tier 5) ---- */
+
+    private static ForgeConfigSpec.LongValue tierCapacity(String suffix, String label, long defaultValue) {
+        return B
+                .comment("Photon Storage " + label + " FE capacity. Default = " + defaultValue + " FE.",
+                         "Range: 1 .. Long.MAX_VALUE (~9.2 quintillion).")
+                .defineInRange("storage.tier" + suffix + "Capacity", defaultValue, 1L, Long.MAX_VALUE);
+    }
+    private static final ForgeConfigSpec.LongValue STORAGE_CAP_T1 = tierCapacity("1", "I (Copper)",    1L << 16);
+    private static final ForgeConfigSpec.LongValue STORAGE_CAP_T2 = tierCapacity("2", "II (Iron)",     1L << 20);
+    private static final ForgeConfigSpec.LongValue STORAGE_CAP_T3 = tierCapacity("3", "III (Gold)",    1L << 24);
+    private static final ForgeConfigSpec.LongValue STORAGE_CAP_T4 = tierCapacity("4", "IV (Diamond)",  1L << 28);
+    private static final ForgeConfigSpec.LongValue STORAGE_CAP_T5 = tierCapacity("5", "V (Emerald)",   1L << 32);
 
     /* ---- resource pipelines: master switches + per-cycle caps ---- */
 
@@ -117,6 +144,11 @@ public class ServerConfig {
 
     public static boolean allowCrossDimension = true;
 
+    public static int emitterPushRate    = 0;
+    public static int receiverOutputRate = 0;
+    /** Index = tier - 1. Populated on config load. */
+    public static long[] storageCapacities = new long[]{ 1L << 16, 1L << 20, 1L << 24, 1L << 28, 1L << 32 };
+
     public static boolean itemsRoutingEnabled    = true;
     public static int     itemsMaxBatch          = ItemChannelConfig.MAX_BATCH;
     public static int     itemsMaxSubsPerEmitter = 3;
@@ -148,17 +180,72 @@ public class ServerConfig {
     static void onLoad(final ModConfigEvent event) {
         if (event.getConfig().getSpec() != SPEC) return;
         applyTo(event);
-        // On a Reloading event the server is already running — fan the fresh snapshot out to every
-        // connected player so their UI mirrors update without waiting for a relog.
+        // Reloading events fire when an admin edits the toml while the server runs. Push the new
+        // snapshot to every connected player so their UI mirrors update without waiting for a relog.
+        // getCurrentServer() returns null on a pure client (dedicated multiplayer client), where
+        // edits to the local file shouldn't affect the connected server anyway.
         if (event instanceof ModConfigEvent.Reloading) {
             net.minecraft.server.MinecraftServer srv = net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
-            if (srv != null) com.quantumchanneling.channel.SyncServerConfigPacket.sendToAll(srv);
+            if (srv != null) {
+                // Reapply the disable mask to existing channel data, then push the snapshot so
+                // open clients see both the locked UI AND the cleaned channel state.
+                com.quantumchanneling.channel.ChannelData.get(srv).applyChargingSlotConfig();
+                com.quantumchanneling.channel.SyncServerConfigPacket.sendToAll(srv);
+            }
+        }
+    }
+
+    /**
+     * Called from {@link ServerConfigSync} when the client disconnects from a remote server, so
+     * the local mirror reverts from the server's overridden values back to the player's own toml.
+     * This needs the spec to actually be loaded (it always is by mid-init, but we guard anyway).
+     */
+    public static void reapplyLocal() {
+        try {
+            allowCrossDimension    = ALLOW_CROSS_DIMENSION.get();
+            emitterPushRate        = EMITTER_PUSH_RATE.get();
+            receiverOutputRate     = RECEIVER_OUTPUT_RATE.get();
+            storageCapacities      = new long[]{
+                    STORAGE_CAP_T1.get(), STORAGE_CAP_T2.get(), STORAGE_CAP_T3.get(),
+                    STORAGE_CAP_T4.get(), STORAGE_CAP_T5.get()
+            };
+            itemsRoutingEnabled     = ITEMS_ENABLED.get();
+            itemsMaxBatch           = ITEMS_MAX_BATCH.get();
+            itemsMaxSubsPerEmitter  = ITEMS_MAX_SUBS_PER_EMITTER.get();
+            itemsMaxSubsPerReceiver = ITEMS_MAX_SUBS_PER_RECEIVER.get();
+            itemsMaxSubsPerChannel  = ITEMS_MAX_SUBS_PER_CHANNEL.get();
+            fluidsRoutingEnabled    = FLUIDS_ENABLED.get();
+            fluidsMaxBatch          = FLUIDS_MAX_BATCH.get();
+            fluidsMaxSubsPerEmitter = FLUIDS_MAX_SUBS_PER_EMITTER.get();
+            fluidsMaxSubsPerReceiver = FLUIDS_MAX_SUBS_PER_RECEIVER.get();
+            fluidsMaxSubsPerChannel = FLUIDS_MAX_SUBS_PER_CHANNEL.get();
+            gasesRoutingEnabled     = GASES_ENABLED.get();
+            gasesMaxBatch           = GASES_MAX_BATCH.get();
+            gasesMaxSubsPerEmitter  = GASES_MAX_SUBS_PER_EMITTER.get();
+            gasesMaxSubsPerReceiver = GASES_MAX_SUBS_PER_RECEIVER.get();
+            gasesMaxSubsPerChannel  = GASES_MAX_SUBS_PER_CHANNEL.get();
+            heatRoutingEnabled      = HEAT_ENABLED.get();
+            wirelessEnabled        = ENABLE_WIRELESS.get();
+            slotHandEnabled        = ENABLE_HAND.get();
+            slotHotbarEnabled      = ENABLE_HOTBAR.get();
+            slotInventoryEnabled   = ENABLE_INVENTORY.get();
+            slotArmorEnabled       = ENABLE_ARMOR.get();
+            slotCuriosEnabled      = ENABLE_CURIOS.get();
+        } catch (IllegalStateException notLoadedYet) {
+            // Spec hasn't finished loading — happens during very-early init. Static-field defaults
+            // are already what we'd write here, so a no-op is correct.
         }
     }
 
     private static void applyTo(final ModConfigEvent event) {
         // Field assignment lives here so onLoad can wrap it with the reload-sync hook.
         allowCrossDimension    = ALLOW_CROSS_DIMENSION.get();
+        emitterPushRate        = EMITTER_PUSH_RATE.get();
+        receiverOutputRate     = RECEIVER_OUTPUT_RATE.get();
+        storageCapacities      = new long[]{
+                STORAGE_CAP_T1.get(), STORAGE_CAP_T2.get(), STORAGE_CAP_T3.get(),
+                STORAGE_CAP_T4.get(), STORAGE_CAP_T5.get()
+        };
         itemsRoutingEnabled     = ITEMS_ENABLED.get();
         itemsMaxBatch           = ITEMS_MAX_BATCH.get();
         itemsMaxSubsPerEmitter  = ITEMS_MAX_SUBS_PER_EMITTER.get();

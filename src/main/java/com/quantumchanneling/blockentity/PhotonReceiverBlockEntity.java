@@ -1,7 +1,7 @@
 package com.quantumchanneling.blockentity;
 
-import com.quantumchanneling.Config;
 import com.quantumchanneling.QuantumChanneling;
+import com.quantumchanneling.ServerConfig;
 import com.quantumchanneling.menu.PhotonNodeMenu;
 import com.quantumchanneling.channel.ChannelData;
 import com.quantumchanneling.channel.QuantumChannel;
@@ -47,7 +47,7 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
         @Override public int receiveEnergy(int max, boolean simulate) { return acceptAndForward(max, simulate); }
         @Override public int extractEnergy(int max, boolean simulate) { return 0; }
         @Override public int getEnergyStored() { return 0; }
-        @Override public int getMaxEnergyStored() { return effectiveBudget(Config.receiverOutputRate); }
+        @Override public int getMaxEnergyStored() { return effectiveBudget(ServerConfig.receiverOutputRate); }
         @Override public boolean canExtract() { return false; }
         @Override public boolean canReceive() { return true; }
     };
@@ -245,7 +245,7 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
     private void pullFromChannelStorageAndForward(ServerLevel level) {
         UUID channelId = getChannelId();
         if (channelId == null) return;
-        int budget = effectiveBudget(Config.receiverOutputRate);
+        int budget = effectiveBudget(ServerConfig.receiverOutputRate);
         int room = Math.max(0, budget - forwardedThisTick);
         if (room <= 0) return;
         int demand = simulateAdjacentDemand(level, room);
@@ -290,7 +290,7 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
     }
 
     public int acceptAndForward(int amount, boolean simulate) {
-        int budget = effectiveBudget(Config.receiverOutputRate);
+        int budget = effectiveBudget(ServerConfig.receiverOutputRate);
         int cap = Math.max(0, budget - forwardedThisTick);
         int b = Math.min(amount, cap);
         if (b <= 0) return 0;

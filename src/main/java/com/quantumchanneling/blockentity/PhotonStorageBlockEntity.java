@@ -1,7 +1,7 @@
 package com.quantumchanneling.blockentity;
 
-import com.quantumchanneling.Config;
 import com.quantumchanneling.QuantumChanneling;
+import com.quantumchanneling.ServerConfig;
 import com.quantumchanneling.block.PhotonStorageBlock;
 import com.quantumchanneling.menu.PhotonNodeMenu;
 import com.quantumchanneling.channel.QuantumChannel;
@@ -73,7 +73,7 @@ public class PhotonStorageBlockEntity extends ChannelBoundBlockEntity implements
     public PhotonStorageBlockEntity(BlockPos pos, BlockState state) {
         super(QuantumChanneling.PHOTON_STORAGE_BE.get(), pos, state);
         int tier = state.getBlock() instanceof PhotonStorageBlock psb ? psb.getTier() : 1;
-        long[] caps = Config.storageCapacities;
+        long[] caps = ServerConfig.storageCapacities;
         this.capacity = (caps != null && tier - 1 < caps.length) ? caps[tier - 1] : (1L << 16);
     }
 

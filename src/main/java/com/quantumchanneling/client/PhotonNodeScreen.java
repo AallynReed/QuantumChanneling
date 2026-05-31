@@ -1689,41 +1689,75 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             int x = chargeCardX(i);
             int y = chargeCardY(top, i);
             int slotBit = CHARGE_SLOT_BITS[i];
-            boolean on = currentChannel.charges(slotBit);
+            boolean serverDisabled = !isSlotAllowedByServer(slotBit);
+            // When the server forbids this slot, the channel may still have it set in its mask
+            // (existing data) — but we display it as locked and ignore clicks. The dispatcher
+            // already skips it tick-side; this just makes the UI reflect that.
+            boolean on = !serverDisabled && currentChannel.charges(slotBit);
             int pr = currentChannel.slotPriority(slotBit);
 
-            // Card body + border. Active = brighter body + accent glow border.
-            int border = on ? accent : 0xFF333A48;
-            int body = on ? 0xFF192030 : 0xFF0F141C;
+            // Card body + border. Server-locked uses a dim red palette so it's obviously not just
+            // "off"; active uses the channel accent; off-but-allowed uses neutral grey.
+            int border = serverDisabled ? 0xFF4A2030
+                    : (on ? accent : 0xFF333A48);
+            int body = serverDisabled ? 0xFF1A0E14
+                    : (on ? 0xFF192030 : 0xFF0F141C);
             gfx.fill(x - 1, y - 1, x + CHARGE_CARD_W + 1, y + CHARGE_CARD_H + 1, border);
             gfx.fill(x, y, x + CHARGE_CARD_W, y + CHARGE_CARD_H, body);
 
-            // Icon swatch (top-right corner) — colored block hinting at the slot group.
             int iconSize = 12;
             int iconX = x + CHARGE_CARD_W - iconSize - 6;
             int iconY = y + 6;
-            int iconColor = on ? CHARGE_SLOT_ICON[i] : blendARGB(CHARGE_SLOT_ICON[i], 0xFF000000, 0.55f);
+            int iconColor = serverDisabled
+                    ? blendARGB(CHARGE_SLOT_ICON[i], 0xFF000000, 0.75f)
+                    : (on ? CHARGE_SLOT_ICON[i] : blendARGB(CHARGE_SLOT_ICON[i], 0xFF000000, 0.55f));
             gfx.fill(iconX, iconY, iconX + iconSize, iconY + iconSize, iconColor);
-            // Small accent border around the icon.
             gfx.fill(iconX - 1, iconY - 1, iconX + iconSize + 1, iconY, 0xFF000000);
             gfx.fill(iconX - 1, iconY + iconSize, iconX + iconSize + 1, iconY + iconSize + 1, 0xFF000000);
             gfx.fill(iconX - 1, iconY - 1, iconX, iconY + iconSize + 1, 0xFF000000);
             gfx.fill(iconX + iconSize, iconY - 1, iconX + iconSize + 1, iconY + iconSize + 1, 0xFF000000);
 
-            // Title
             Component title = Component.translatable(CHARGE_SLOT_KEYS[i]);
-            int titleColor = on ? 0xFFFFFFFF : 0xFFA0A8B4;
+            int titleColor = serverDisabled ? 0xFF806060
+                    : (on ? 0xFFFFFFFF : 0xFFA0A8B4);
             gfx.drawString(font, title, x + 8, y + 6, titleColor, false);
 
-            // State pill
-            Component state = Component.literal(on ? "§a● Active" : "§7○ Disabled");
-            gfx.drawString(font, state, x + 8, y + 20, on ? 0xFF80E0A0 : 0xFF888888, false);
+            Component state;
+            int stateColor;
+            if (serverDisabled) {
+                state = Component.translatable("gui.quantumchanneling.charge.locked_by_server");
+                stateColor = 0xFFE07070;
+            } else if (on) {
+                state = Component.literal("§a● Active");
+                stateColor = 0xFF80E0A0;
+            } else {
+                state = Component.literal("§7○ Disabled");
+                stateColor = 0xFF888888;
+            }
+            gfx.drawString(font, state, x + 8, y + 20, stateColor, false);
 
-            // Priority badge (bottom-left).
             String prText = "↕ P: " + pr;
             gfx.drawString(font, Component.literal(prText), x + 8, y + CHARGE_CARD_H - 12,
-                    on ? 0xFFC8E0FF : 0xFF6A7280, false);
+                    serverDisabled ? 0xFF50586A
+                            : (on ? 0xFFC8E0FF : 0xFF6A7280), false);
         }
+    }
+
+    /**
+     * Server-side gate for a charging slot group: a single slot is allowed only when both the
+     * wireless master switch and the slot's own toggle are enabled in the synced config mirror.
+     * Used to paint locked styling and to swallow clicks / scrolls on disabled cards.
+     */
+    private static boolean isSlotAllowedByServer(int slotBit) {
+        if (!ClientServerConfig.wirelessEnabled) return false;
+        return switch (slotBit) {
+            case ChargingSlots.HAND      -> ClientServerConfig.slotHandEnabled;
+            case ChargingSlots.HOTBAR    -> ClientServerConfig.slotHotbarEnabled;
+            case ChargingSlots.INVENTORY -> ClientServerConfig.slotInventoryEnabled;
+            case ChargingSlots.ARMOR     -> ClientServerConfig.slotArmorEnabled;
+            case ChargingSlots.CURIOS    -> ClientServerConfig.slotCuriosEnabled;
+            default -> true;
+        };
     }
 
     /* -------- Charge tab: armor sub-priority row -------- */
@@ -1797,42 +1831,42 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         int cx = leftPos + 8;
         int rw = BG_W - 16;
         boolean curiosLoaded = Compat.curiosLoaded();
-        boolean on = curiosLoaded && currentChannel.charges(ChargingSlots.CURIOS);
+        boolean serverDisabled = !isSlotAllowedByServer(ChargingSlots.CURIOS);
+        boolean on = curiosLoaded && !serverDisabled && currentChannel.charges(ChargingSlots.CURIOS);
         int pr = currentChannel.slotPriority(ChargingSlots.CURIOS);
         int accent = currentChannel.color();
 
-        int border = !curiosLoaded ? 0xFF252A35
-                : (on ? accent : 0xFF333A48);
-        int body = !curiosLoaded ? 0xFF080C12
-                : (on ? 0xFF192030 : 0xFF0F141C);
+        int border, body;
+        int titleColor, stateColor, prColor;
+        Component state;
+        if (!curiosLoaded) {
+            border = 0xFF252A35; body = 0xFF080C12;
+            titleColor = 0xFF606878; stateColor = 0xFF707888; prColor = 0xFF50586A;
+            state = Component.translatable("gui.quantumchanneling.charge.baubles.not_installed");
+        } else if (serverDisabled) {
+            border = 0xFF4A2030; body = 0xFF1A0E14;
+            titleColor = 0xFF806060; stateColor = 0xFFE07070; prColor = 0xFF50586A;
+            state = Component.translatable("gui.quantumchanneling.charge.locked_by_server");
+        } else if (on) {
+            border = accent; body = 0xFF192030;
+            titleColor = 0xFFFFFFFF; stateColor = 0xFF80E0A0; prColor = 0xFFC8E0FF;
+            state = Component.literal("§a● Active");
+        } else {
+            border = 0xFF333A48; body = 0xFF0F141C;
+            titleColor = 0xFFA0A8B4; stateColor = 0xFF888888; prColor = 0xFF6A7280;
+            state = Component.literal("§7○ Disabled");
+        }
         gfx.fill(cx - 1, y - 1, cx + rw + 1, y + CURIOS_CARD_H + 1, border);
         gfx.fill(cx, y, cx + rw, y + CURIOS_CARD_H, body);
 
-        // Title
-        Component title = Component.translatable("gui.quantumchanneling.charge.baubles");
-        int titleColor = !curiosLoaded ? 0xFF606878 : (on ? 0xFFFFFFFF : 0xFFA0A8B4);
-        gfx.drawString(font, title, cx + 8, y + 4, titleColor, false);
-
-        // State or "Disabled — install Curios" message
-        Component state;
-        int stateColor;
-        if (!curiosLoaded) {
-            state = Component.translatable("gui.quantumchanneling.charge.baubles.not_installed");
-            stateColor = 0xFF707888;
-        } else if (on) {
-            state = Component.literal("§a● Active");
-            stateColor = 0xFF80E0A0;
-        } else {
-            state = Component.literal("§7○ Disabled");
-            stateColor = 0xFF888888;
-        }
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.charge.baubles"),
+                cx + 8, y + 4, titleColor, false);
         gfx.drawString(font, state, cx + 8, y + CURIOS_CARD_H - 12, stateColor, false);
 
-        // Priority badge (right side)
         String prText = "↕ P: " + pr;
         int prW = font.width(prText);
         gfx.drawString(font, Component.literal(prText), cx + rw - prW - 8, y + CURIOS_CARD_H - 12,
-                !curiosLoaded ? 0xFF50586A : (on ? 0xFFC8E0FF : 0xFF6A7280), false);
+                prColor, false);
     }
 
     private boolean curiosCardAt(double mx, double my) {
@@ -2571,14 +2605,17 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (activeTab == Tab.CHARGE && currentChannel != null && currentChannel.canManage()) {
             int slot = chargeCardSlotAt(mx, my);
             if (slot != 0) {
-                ModMessages.sendToServer(new SetChannelChargingPacket(
-                        currentChannel.id(), ChargingSlots.toggle(currentChannel.chargingSlots(), slot)));
-                return true;
+                if (isSlotAllowedByServer(slot)) {
+                    ModMessages.sendToServer(new SetChannelChargingPacket(
+                            currentChannel.id(), ChargingSlots.toggle(currentChannel.chargingSlots(), slot)));
+                }
+                return true;   // swallow even when locked so the click doesn't fall through
             }
-            // Curios placeholder card — only togglable when the Curios mod is loaded.
             if (Compat.curiosLoaded() && curiosCardAt(mx, my)) {
-                ModMessages.sendToServer(new SetChannelChargingPacket(
-                        currentChannel.id(), ChargingSlots.toggle(currentChannel.chargingSlots(), ChargingSlots.CURIOS)));
+                if (isSlotAllowedByServer(ChargingSlots.CURIOS)) {
+                    ModMessages.sendToServer(new SetChannelChargingPacket(
+                            currentChannel.id(), ChargingSlots.toggle(currentChannel.chargingSlots(), ChargingSlots.CURIOS)));
+                }
                 return true;
             }
         }
@@ -2651,19 +2688,24 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             int step = (int) Math.signum(delta);
             int slot = chargeCardSlotAt(mx, my);
             if (slot != 0) {
-                int newPri = currentChannel.slotPriority(slot) + step;
-                ModMessages.sendToServer(new SetChannelSlotPriorityPacket(
-                        currentChannel.id(), slot, newPri));
+                if (isSlotAllowedByServer(slot)) {
+                    int newPri = currentChannel.slotPriority(slot) + step;
+                    ModMessages.sendToServer(new SetChannelSlotPriorityPacket(
+                            currentChannel.id(), slot, newPri));
+                }
                 return true;
             }
             int armorIdx = armorPieceAt(mx, my);
             if (armorIdx >= 0) {
-                int newPri = currentChannel.armorPiecePriority(armorIdx) + step;
-                ModMessages.sendToServer(new SetChannelArmorPriorityPacket(
-                        currentChannel.id(), armorIdx, newPri));
+                if (isSlotAllowedByServer(ChargingSlots.ARMOR)) {
+                    int newPri = currentChannel.armorPiecePriority(armorIdx) + step;
+                    ModMessages.sendToServer(new SetChannelArmorPriorityPacket(
+                            currentChannel.id(), armorIdx, newPri));
+                }
                 return true;
             }
             if (Compat.curiosLoaded() && curiosCardAt(mx, my)) {
+                if (!isSlotAllowedByServer(ChargingSlots.CURIOS)) return true;
                 int newPri = currentChannel.slotPriority(ChargingSlots.CURIOS) + step;
                 ModMessages.sendToServer(new SetChannelSlotPriorityPacket(
                         currentChannel.id(), ChargingSlots.CURIOS, newPri));
