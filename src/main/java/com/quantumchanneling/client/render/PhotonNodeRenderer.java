@@ -2,9 +2,11 @@ package com.quantumchanneling.client.render;
 
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.math.Axis;
 import com.quantumchanneling.block.PhotonShape;
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
+import com.quantumchanneling.blockentity.PhotonManagerBlockEntity;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
@@ -12,6 +14,7 @@ import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
 import net.minecraft.core.Direction;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
+import org.joml.Vector3f;
 
 /**
  * Custom-shader renderer for emitter + receiver. Three GLSL programs handle the visuals:
@@ -44,14 +47,38 @@ import org.joml.Quaternionf;
  */
 public class PhotonNodeRenderer<T extends ChannelBoundBlockEntity> implements BlockEntityRenderer<T> {
 
-    /** Accent colors. Blue for emitter, red for receiver. */
-    private static final int EMITTER_RGB  = 0x4FA0FF;
-    private static final int RECEIVER_RGB = 0xFF5560;
-
     /** Half-size of the halo billboard. 0.32 × √2 = 0.452, well inside the block's 0.5 half-extent. */
     private static final float HALO_QUAD_HALF = 0.32f;
     /** Half-size of the void billboard. */
     private static final float VOID_QUAD_HALF = 0.14f;
+    /** Half-size of one gyroscope ring quad. 0.38 × √2 = 0.537 — the corners poke past the block
+     *  edge, but the shader's {@code if (d > 1.0) discard} cuts those corners, and the actual ring
+     *  band sits at d=0.82 (world radius 0.38 × 0.82 ≈ 0.31), well inside the block. */
+    private static final float GYRO_QUAD_HALF = 0.38f;
+
+    /** Gyroscope ring color — warm gold. Distinct from the manager's central violet halo so the
+     *  device reads as two-tone (gold cage + violet core) instead of monochrome. */
+    private static final int GYRO_R = 0xFF;
+    private static final int GYRO_G = 0xD8;
+    private static final int GYRO_B = 0x60;
+
+    /** Bolt accent color — violet matching {@code PhotonAccent.MANAGER}. The shader blends toward
+     *  white at the bolt's hot core so the visual reads as "violet electricity with a white-hot
+     *  centre," tying the bolts back to the central black-hole's color. */
+    private static final int BOLT_R = 0xB0;
+    private static final int BOLT_G = 0x7B;
+    private static final int BOLT_B = 0xFF;
+
+    /** Half-width of each bolt's tube quad. Sets the quad's physical width in world space; the
+     *  shader picks what fraction of that width the visible bolt occupies. Bumped from 0.06 to
+     *  0.10 — combined with the shader's wider centerline wobble + thicker halfWidth, this gives
+     *  the bolt enough room to swing without clipping at the quad edges and reads as a meaty
+     *  arc instead of a thin spark. */
+    private static final float BOLT_HALF_WIDTH = 0.10f;
+    /** World-space offset from block center to a corner vault's inner corner. The vaults are
+     *  3×3×3 voxels at the block corners; their inner corner is at voxel (3,3,3) / (13,3,3) /
+     *  etc. = 3/16 from the nearest face = 0.3125 from block center on each axis. */
+    private static final float BOLT_END_OFFSET = 0.3125f;
 
     /** Half-width of the beam quad at the ball end. Shader handles the visual tapering
      *  internally so the beam still narrows enough to pass through the ring's 2x2 side hollow
@@ -69,8 +96,9 @@ public class PhotonNodeRenderer<T extends ChannelBoundBlockEntity> implements Bl
                        MultiBufferSource buffer, int packedLight, int packedOverlay) {
         if (be.getLevel() == null) return;
 
-        boolean isEmitter = be instanceof PhotonEmitterBlockEntity;
-        int rgb = isEmitter ? EMITTER_RGB : RECEIVER_RGB;
+        boolean isEmitter   = be instanceof PhotonEmitterBlockEntity;
+        boolean drawsBeams  = PhotonAccent.rendersBeams(be);
+        int rgb = PhotonAccent.colorFor(be);
         int r = (rgb >> 16) & 0xFF;
         int g = (rgb >> 8) & 0xFF;
         int b = rgb & 0xFF;
@@ -83,19 +111,43 @@ public class PhotonNodeRenderer<T extends ChannelBoundBlockEntity> implements Bl
         drawShadedBillboard(pose, halo, HALO_QUAD_HALF, r, g, b, 255, 0.0f);
 
         // ---- beams (custom additive shader) ----
-        var state = be.getBlockState();
-        VertexConsumer beam = buffer.getBuffer(PhotonRenderTypes.PHOTON_BEAM);
-        for (Direction d : Direction.values()) {
-            if (!state.getValue(PhotonShape.connProp(d))) continue;
-            renderBeam(pose, beam, d, r, g, b, isEmitter);
+        // Manager and storage devices are network-control / battery roles — they don't route a
+        // directional flow through ports, so they skip the beam pass entirely. The PhotonShape
+        // connection properties on those blocks remain at default-false so the loop would no-op
+        // anyway, but the explicit guard avoids reading state we know isn't meaningful.
+        if (drawsBeams) {
+            var state = be.getBlockState();
+            VertexConsumer beam = buffer.getBuffer(PhotonRenderTypes.PHOTON_BEAM);
+            for (Direction d : Direction.values()) {
+                if (!state.getValue(PhotonShape.connProp(d))) continue;
+                renderBeam(pose, beam, d, r, g, b, isEmitter);
+            }
         }
 
-        // Flush both additive passes BEFORE the void layer so the dark sphere overlays them
+        // ---- gyroscope rings + bolts (manager-only, custom additive shaders) ----
+        // Gyroscope: three interlocking ring quads tumbling on different axes. Bolts: eight
+        // lightning tubes arcing from the central orb to each of the corner vaults, strobing
+        // asynchronously. Both are drawn BEFORE the void so the dark central sphere still
+        // overlays the inner endpoints of the bolts/rings correctly.
+        if (be instanceof PhotonManagerBlockEntity) {
+            VertexConsumer gyro = buffer.getBuffer(PhotonRenderTypes.PHOTON_GYROSCOPE);
+            renderGyroscope(pose, gyro, GYRO_R, GYRO_G, GYRO_B,
+                    be.getLevel().getGameTime(), partialTick);
+
+            VertexConsumer bolt = buffer.getBuffer(PhotonRenderTypes.PHOTON_BOLT);
+            renderCornerBolts(pose, bolt, BOLT_R, BOLT_G, BOLT_B);
+        }
+
+        // Flush all additive passes BEFORE the void layer so the dark sphere overlays them
         // instead of being painted underneath. BufferSource batches by render type — explicit
         // endBatch here decides the layering order.
         if (buffer instanceof MultiBufferSource.BufferSource bs) {
             bs.endBatch(PhotonRenderTypes.PHOTON_HALO);
-            bs.endBatch(PhotonRenderTypes.PHOTON_BEAM);
+            if (drawsBeams) bs.endBatch(PhotonRenderTypes.PHOTON_BEAM);
+            if (be instanceof PhotonManagerBlockEntity) {
+                bs.endBatch(PhotonRenderTypes.PHOTON_GYROSCOPE);
+                bs.endBatch(PhotonRenderTypes.PHOTON_BOLT);
+            }
         }
 
         // ---- dark void (custom translucent shader) ----
@@ -199,6 +251,119 @@ public class PhotonNodeRenderer<T extends ChannelBoundBlockEntity> implements Bl
         vc.vertex(m, x2, y2, z2).color(r, g, b, a).uv(uBall, 1.0f).endVertex();
         vc.vertex(m, x3, y3, z3).color(r, g, b, a).uv(uFace, 1.0f).endVertex();
         vc.vertex(m, x4, y4, z4).color(r, g, b, a).uv(uFace, 0.0f).endVertex();
+    }
+
+    /**
+     * Three interlocking ring quads tumbling on different axes. Each ring's base orientation is
+     * applied first (lay flat / vertical XY / vertical YZ) then a slow time-driven rotation tilts
+     * the whole plane. The shader handles the orbital bright-spot animation within each ring's
+     * surface, so the visual movement is two-layer: the plane tumbles in 3D AND the surface
+     * pulses internally.
+     *
+     * <p>The three rotation periods are deliberately non-commensurate (≈ 14 s, ≈ 9.7 s, ≈ 7.4 s)
+     * so the three rings never resynchronise — the structure stays visually "alive" instead of
+     * settling into a repeating pose. {@code partialTick} smooths the rotation across sub-tick
+     * frames so the motion isn't strobed at 20 Hz.
+     */
+    public static void renderGyroscope(PoseStack pose, VertexConsumer ring,
+                                       int r, int g, int b, long gameTime, float partialTick) {
+        float t = (gameTime + partialTick) / 20.0f; // seconds
+
+        // Ring 1 — originally horizontal (lying flat in XZ). Tumble around Z axis so the plane
+        // tilts left-right over time.
+        pose.pushPose();
+        pose.mulPose(Axis.ZP.rotation(t * 0.45f));
+        pose.mulPose(Axis.XP.rotation((float) (Math.PI / 2.0)));
+        drawRingQuad(pose, ring, r, g, b);
+        pose.popPose();
+
+        // Ring 2 — originally vertical, in the XY plane (facing camera by default). Tumble around
+        // X axis so the plane tilts up-down.
+        pose.pushPose();
+        pose.mulPose(Axis.XP.rotation(t * 0.65f));
+        drawRingQuad(pose, ring, r, g, b);
+        pose.popPose();
+
+        // Ring 3 — originally vertical, in the YZ plane (facing sideways). Tumble around Y so the
+        // plane tilts front-back.
+        pose.pushPose();
+        pose.mulPose(Axis.YP.rotation(t * 0.85f));
+        pose.mulPose(Axis.YP.rotation((float) (Math.PI / 2.0)));
+        drawRingQuad(pose, ring, r, g, b);
+        pose.popPose();
+    }
+
+    /** A single ring quad in its current local frame. The shader draws the annular ring shape
+     *  from UV coordinates — this quad just provides the canvas + accent color. */
+    private static void drawRingQuad(PoseStack pose, VertexConsumer vc, int r, int g, int b) {
+        float h = GYRO_QUAD_HALF;
+        Matrix4f m = pose.last().pose();
+        vc.vertex(m, -h, -h, 0).color(r, g, b, 255).uv(0.0f, 0.0f).endVertex();
+        vc.vertex(m,  h, -h, 0).color(r, g, b, 255).uv(1.0f, 0.0f).endVertex();
+        vc.vertex(m,  h,  h, 0).color(r, g, b, 255).uv(1.0f, 1.0f).endVertex();
+        vc.vertex(m, -h,  h, 0).color(r, g, b, 255).uv(0.0f, 1.0f).endVertex();
+    }
+
+    /**
+     * Eight lightning bolts from the block center to each of the eight corner vaults. Each bolt
+     * is rendered as two perpendicular tube quads (same volume trick as photon_beam) so the bolt
+     * has visible thickness from any view direction. The bolt phase is encoded in the alpha
+     * channel — {@code (boltIndex / 8) * 255} gives eight distinct phases the shader uses to
+     * stagger its jagged centerline + strobe so the eight bolts never fire in sync.
+     */
+    public static void renderCornerBolts(PoseStack pose, VertexConsumer vc, int r, int g, int b) {
+        Matrix4f m = pose.last().pose();
+        int boltIndex = 0;
+        for (int dx = -1; dx <= 1; dx += 2) {
+            for (int dy = -1; dy <= 1; dy += 2) {
+                for (int dz = -1; dz <= 1; dz += 2) {
+                    drawBolt(vc, m, dx, dy, dz, r, g, b, boltIndex++);
+                }
+            }
+        }
+    }
+
+    /**
+     * One lightning bolt. {@code dx,dy,dz} ∈ {-1, +1} picks which corner the bolt arcs toward;
+     * {@code boltIndex} ∈ 0..7 maps to a per-bolt phase (encoded as alpha) so the shader can
+     * desynchronise the eight bolts' strobes.
+     *
+     * <p>Geometry: compute the bolt direction (corner − center), pick two perpendicular axes by
+     * crossing with world-up (or world-X when the bolt is vertical), and build two perpendicular
+     * tube quads. Each quad's u = 0 at the center, u = 1 at the corner; v spans 0..1 across the
+     * tube width, where the shader's jagged centerline meanders.
+     */
+    private static void drawBolt(VertexConsumer vc, Matrix4f m, int dx, int dy, int dz,
+                                 int r, int g, int b, int boltIndex) {
+        float off = BOLT_END_OFFSET;
+        Vector3f dir = new Vector3f(dx * off, dy * off, dz * off);
+        // Pick a vector not parallel to the bolt for the first perpendicular cross — bolts never
+        // run purely along Y (all 8 corners have a Y component), so world-up is always safe.
+        Vector3f w1 = new Vector3f(dir).cross(0.0f, 1.0f, 0.0f).normalize().mul(BOLT_HALF_WIDTH);
+        Vector3f w2 = new Vector3f(dir).cross(w1).normalize().mul(BOLT_HALF_WIDTH);
+
+        // Phase = boltIndex / 8 in alpha space (0, 32, 64, ... 224). Shader reads alpha/255 and
+        // multiplies by 2π to get an angular offset that varies per bolt.
+        int phaseAlpha = (boltIndex * 255) / 8;
+
+        // Quad 1 — width along w1.
+        boltQuad(vc, m, w1, dir, r, g, b, phaseAlpha);
+        // Quad 2 — width along w2 (perpendicular to w1).
+        boltQuad(vc, m, w2, dir, r, g, b, phaseAlpha);
+    }
+
+    /** Writes a single bolt-quad's four vertices. The "start" end (center of block) is at the
+     *  origin in current pose coordinates; the "end" is at {@code dir}. The quad spans ±w around
+     *  the bolt axis. */
+    private static void boltQuad(VertexConsumer vc, Matrix4f m,
+                                 Vector3f w, Vector3f dir,
+                                 int r, int g, int b, int phaseAlpha) {
+        // Start vertices (u = 0).
+        vc.vertex(m, -w.x, -w.y, -w.z).color(r, g, b, phaseAlpha).uv(0.0f, 0.0f).endVertex();
+        vc.vertex(m,  w.x,  w.y,  w.z).color(r, g, b, phaseAlpha).uv(0.0f, 1.0f).endVertex();
+        // End vertices (u = 1).
+        vc.vertex(m, dir.x + w.x, dir.y + w.y, dir.z + w.z).color(r, g, b, phaseAlpha).uv(1.0f, 1.0f).endVertex();
+        vc.vertex(m, dir.x - w.x, dir.y - w.y, dir.z - w.z).color(r, g, b, phaseAlpha).uv(1.0f, 0.0f).endVertex();
     }
 
     @Override

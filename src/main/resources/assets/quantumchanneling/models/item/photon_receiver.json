@@ -1,6 +1,7 @@
 {
-  "__comment": "See photon_emitter.json — same pattern. builtin/entity drives the BEWLR path.",
+  "__comment": "See photon_emitter.json — same pattern. builtin/entity drives the BEWLR path. gui_light=side keeps the 3D shading in the inventory slot.",
   "parent": "builtin/entity",
+  "gui_light": "side",
   "display": {
     "gui": {
       "rotation": [30, 225, 0],

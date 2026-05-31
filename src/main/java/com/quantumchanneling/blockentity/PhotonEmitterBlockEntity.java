@@ -55,17 +55,33 @@ import java.util.Set;
 import java.util.UUID;
 
 public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements MenuProvider {
-    private int forwardedThisTick = 0;
-    private int lastTickThroughput = 0;
+    // Per-resource throughput. Energy is in FE/tick, items in stacks/tick, fluids and gas in mB/tick.
+    // Each is rolled to its own per-second history so the Stats graph can show the mode the player
+    // is actually looking at — energy on the Energy tab, items on Items, etc.
+    private int feForwardedThisTick = 0, lastTickFE = 0;
+    private int itemsRoutedThisTick = 0, lastTickItems = 0;
+    private int fluidsRoutedThisTick = 0, lastTickFluids = 0;
+    private int gasRoutedThisTick = 0, lastTickGas = 0;
 
     // Throughput history: one sample per second (sum over 20 ticks), 3600 samples = 60 minutes.
-    // Transient — never saved to disk, so reopened worlds start fresh.
+    // Transient — never saved to disk, so reopened worlds start fresh. One bank per resource kind.
     private static final int HISTORY_SECONDS = 3600;
-    private final int[] secondsHistory = new int[HISTORY_SECONDS];
+    private final int[] feHistory     = new int[HISTORY_SECONDS];
+    private final int[] itemsHistory  = new int[HISTORY_SECONDS];
+    private final int[] fluidsHistory = new int[HISTORY_SECONDS];
+    private final int[] gasHistory    = new int[HISTORY_SECONDS];
     private int historyHead = 0;
     private int historyFilled = 0;
-    private int secondAccumulator = 0;
+    private int feSecAccumulator = 0, itemsSecAccumulator = 0, fluidsSecAccumulator = 0, gasSecAccumulator = 0;
     private int secondTickCounter = 0;
+
+    // Loop detector. When the routing pipeline finds that a push target equals a pull source on the
+    // same channel (emitter and receiver share an adjacent inventory), it sets this flag and the
+    // game-tick on which it last fired. The UI shows a warning while the flag is "fresh"; it
+    // self-clears after a few seconds of no further loop detections so transient mistakes don't
+    // stick.
+    private long lastLoopDetectedTick = -1L;
+    private static final int LOOP_FLAG_LINGER_TICKS = 60;
 
     /**
      * Energy capability — pure Forge Energy ({@link IEnergyStorage}). This is the universal
@@ -85,11 +101,11 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         @Override
         public int receiveEnergy(int maxReceive, boolean simulate) {
             int budget = effectiveBudget(ServerConfig.emitterPushRate);
-            int cap = Math.max(0, budget - forwardedThisTick);
+            int cap = Math.max(0, budget - feForwardedThisTick);
             int amount = Math.min(maxReceive, cap);
             if (amount <= 0) return 0;
             int forwarded = forwardToChannel(amount, simulate);
-            if (!simulate && forwarded > 0) forwardedThisTick += forwarded;
+            if (!simulate && forwarded > 0) feForwardedThisTick += forwarded;
             return forwarded;
         }
         @Override public int extractEnergy(int max, boolean s) { return 0; }
@@ -638,15 +654,19 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         @Override
         public int get(int index) {
             return switch (index) {
-                case PhotonNodeMenu.DATA_THROUGHPUT -> lastTickThroughput;
-                case PhotonNodeMenu.DATA_CHUNK_LOADED -> isChunkLoadForced() ? 1 : 0;
-                case PhotonNodeMenu.DATA_CHANNEL_BOUND -> getChannelId() != null ? 1 : 0;
-                case PhotonNodeMenu.DATA_THROUGHPUT_CAP -> getThroughputCap();
-                case PhotonNodeMenu.DATA_PRIORITY -> getPriority();
-                case PhotonNodeMenu.DATA_SURGE -> isSurgeMode() ? 1 : 0;
-                case PhotonNodeMenu.DATA_AVG_1MIN -> getAverageFEPerSecond(60);
-                case PhotonNodeMenu.DATA_AVG_5MIN -> getAverageFEPerSecond(300);
-                case PhotonNodeMenu.DATA_AVG_10MIN -> getAverageFEPerSecond(600);
+                case PhotonNodeMenu.DATA_THROUGHPUT        -> lastTickFE;
+                case PhotonNodeMenu.DATA_THROUGHPUT_ITEMS  -> lastTickItems;
+                case PhotonNodeMenu.DATA_THROUGHPUT_FLUIDS -> lastTickFluids;
+                case PhotonNodeMenu.DATA_THROUGHPUT_GAS    -> lastTickGas;
+                case PhotonNodeMenu.DATA_LOOP_WARNING      -> isLoopWarningActive() ? 1 : 0;
+                case PhotonNodeMenu.DATA_CHUNK_LOADED      -> isChunkLoadForced() ? 1 : 0;
+                case PhotonNodeMenu.DATA_CHANNEL_BOUND     -> getChannelId() != null ? 1 : 0;
+                case PhotonNodeMenu.DATA_THROUGHPUT_CAP    -> getThroughputCap();
+                case PhotonNodeMenu.DATA_PRIORITY          -> getPriority();
+                case PhotonNodeMenu.DATA_SURGE             -> isSurgeMode() ? 1 : 0;
+                case PhotonNodeMenu.DATA_AVG_1MIN          -> getAveragePerSecond(60,  ResourceMode.ENERGY);
+                case PhotonNodeMenu.DATA_AVG_5MIN          -> getAveragePerSecond(300, ResourceMode.ENERGY);
+                case PhotonNodeMenu.DATA_AVG_10MIN         -> getAveragePerSecond(600, ResourceMode.ENERGY);
                 default -> resolveGraphBucket(index);
             };
         }
@@ -658,7 +678,30 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         super(QuantumChanneling.PHOTON_EMITTER_BE.get(), pos, state);
     }
 
-    public int getLastTickThroughput() { return lastTickThroughput; }
+    /** Energy moved last tick, in FE/t. Backwards-compatible name kept for callers that already
+     *  expect "the energy number." Items/fluids/gas have their own accessors. */
+    public int getLastTickThroughput() { return lastTickFE; }
+    public int getLastTickFE()         { return lastTickFE; }
+    public int getLastTickItems()      { return lastTickItems; }
+    public int getLastTickFluids()     { return lastTickFluids; }
+    public int getLastTickGas()        { return lastTickGas; }
+
+    /** Per-resource counter accumulators called from the transit helpers. The amount is the number
+     *  of stacks (items) or mB (fluids / gas) actually moved this tick. Called only on the EXECUTE
+     *  path, never during simulate. */
+    public void recordItemsRouted(int amount)  { if (amount > 0) itemsRoutedThisTick  += amount; }
+    public void recordFluidsRouted(int amount) { if (amount > 0) fluidsRoutedThisTick += amount; }
+    public void recordGasRouted(int amount)    { if (amount > 0) gasRoutedThisTick    += amount; }
+
+    /** Set by the transit helpers when they refuse to push back into a block the emitter just
+     *  pulled from on the same channel. The UI lights a warning while the flag is fresh. */
+    public void markLoopDetected() {
+        if (level != null) lastLoopDetectedTick = level.getGameTime();
+    }
+    public boolean isLoopWarningActive() {
+        if (lastLoopDetectedTick < 0 || level == null) return false;
+        return level.getGameTime() - lastLoopDetectedTick < LOOP_FLAG_LINGER_TICKS;
+    }
 
     /** Stagger the periodic connection refresh by position so emitters don't all fire on the same tick. */
     private int connectionRefreshPhase() { return Math.floorMod(getBlockPos().hashCode(), 20); }
@@ -678,37 +721,59 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         return 0;
     }
 
-    /** Accumulates one tick's throughput; commits a sample every 20 ticks (= 1 s). */
-    private void recordSample(int tickAmount) {
-        secondAccumulator += tickAmount;
+    /** Accumulates one tick's throughput per resource; commits a sample every 20 ticks (= 1 s). */
+    private void recordTickSamples() {
+        feSecAccumulator     += lastTickFE;
+        itemsSecAccumulator  += lastTickItems;
+        fluidsSecAccumulator += lastTickFluids;
+        gasSecAccumulator    += lastTickGas;
         secondTickCounter++;
         if (secondTickCounter >= 20) {
-            secondsHistory[historyHead] = secondAccumulator;
+            feHistory[historyHead]     = feSecAccumulator;
+            itemsHistory[historyHead]  = itemsSecAccumulator;
+            fluidsHistory[historyHead] = fluidsSecAccumulator;
+            gasHistory[historyHead]    = gasSecAccumulator;
             historyHead = (historyHead + 1) % HISTORY_SECONDS;
             if (historyFilled < HISTORY_SECONDS) historyFilled++;
-            secondAccumulator = 0;
+            feSecAccumulator = itemsSecAccumulator = fluidsSecAccumulator = gasSecAccumulator = 0;
             secondTickCounter = 0;
         }
     }
 
-    /** Average FE/second over the last {@code seconds} (capped to what we've actually recorded). */
-    public int getAverageFEPerSecond(int seconds) {
+    private int[] historyFor(ResourceMode mode) {
+        return switch (mode) {
+            case ITEMS  -> itemsHistory;
+            case FLUIDS -> fluidsHistory;
+            case GASES  -> gasHistory;
+            default     -> feHistory;
+        };
+    }
+
+    /** Average per second over the last {@code seconds} of the resource selected by {@code mode}.
+     *  ENERGY → FE/s, ITEMS → stacks/s, FLUIDS / GASES → mB/s. */
+    public int getAveragePerSecond(int seconds, ResourceMode mode) {
         if (historyFilled == 0 || seconds <= 0) return 0;
+        int[] hist = historyFor(mode);
         int count = Math.min(seconds, historyFilled);
         long sum = 0;
         for (int i = 0; i < count; i++) {
             int idx = (historyHead - 1 - i + HISTORY_SECONDS) % HISTORY_SECONDS;
-            sum += secondsHistory[idx];
+            sum += hist[idx];
         }
         return (int) (sum / count);
     }
 
+    /** Legacy alias — defaults to ENERGY. Kept so existing callers compile unchanged. */
+    public int getAverageFEPerSecond(int seconds) { return getAveragePerSecond(seconds, ResourceMode.ENERGY); }
+
     /**
      * One bucket out of {@code bucketCount} buckets that together cover {@code windowSecs} seconds
-     * of history. Bucket 0 = oldest, bucketCount-1 = newest. Average FE/s within the bucket.
+     * of history. Bucket 0 = oldest, bucketCount-1 = newest. Average value within the bucket — the
+     * unit follows {@code mode} (FE/s, items/s, mB/s).
      */
-    public int getGraphBucket(int windowSecs, int bucketIdx, int bucketCount) {
+    public int getGraphBucket(int windowSecs, int bucketIdx, int bucketCount, ResourceMode mode) {
         if (historyFilled == 0 || windowSecs <= 0 || bucketCount <= 0) return 0;
+        int[] hist = historyFor(mode);
         int samplesPerBucket = Math.max(1, windowSecs / bucketCount);
         int offset = (bucketCount - 1 - bucketIdx) * samplesPerBucket;
         long sum = 0;
@@ -717,10 +782,16 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
             int sampleOffset = offset + i;
             if (sampleOffset >= historyFilled) continue;
             int idx = (historyHead - 1 - sampleOffset + HISTORY_SECONDS) % HISTORY_SECONDS;
-            sum += secondsHistory[idx];
+            sum += hist[idx];
             count++;
         }
         return count == 0 ? 0 : (int) (sum / count);
+    }
+
+    /** Legacy alias — defaults to ENERGY. The Stats-tab graph reads through this for now; future
+     *  work can switch the graph to whatever the player's active mode is by passing it explicitly. */
+    public int getGraphBucket(int windowSecs, int bucketIdx, int bucketCount) {
+        return getGraphBucket(windowSecs, bucketIdx, bucketCount, ResourceMode.ENERGY);
     }
 
     @Override
@@ -777,7 +848,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
      */
     public int pullForExternal(int want) {
         if (!(level instanceof ServerLevel) || want <= 0) return 0;
-        int budget = effectiveBudget(ServerConfig.emitterPushRate) - forwardedThisTick;
+        int budget = effectiveBudget(ServerConfig.emitterPushRate) - feForwardedThisTick;
         if (budget <= 0) return 0;
         int target = Math.min(want, budget);
         int collected = 0;
@@ -790,16 +861,21 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
             int taken = source.extractEnergy(target - collected, false);
             if (taken > 0) {
                 collected += taken;
-                forwardedThisTick += taken;
+                feForwardedThisTick += taken;
             }
         }
         return collected;
     }
 
     public void serverTick(ServerLevel level) {
-        lastTickThroughput = forwardedThisTick;
-        recordSample(lastTickThroughput);
-        forwardedThisTick = 0;
+        // Snapshot this tick's per-resource counters to "last tick" fields the UI reads, then roll
+        // every per-second history bank with all four amounts at once.
+        lastTickFE     = feForwardedThisTick;
+        lastTickItems  = itemsRoutedThisTick;
+        lastTickFluids = fluidsRoutedThisTick;
+        lastTickGas    = gasRoutedThisTick;
+        recordTickSamples();
+        feForwardedThisTick = itemsRoutedThisTick = fluidsRoutedThisTick = gasRoutedThisTick = 0;
 
         // Roll the per-subchannel throughput windows. Cheap — one int+ and a compare per
         // subchannel. Done unconditionally so the rolling window keeps moving even when nothing
@@ -831,7 +907,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
 
         int budget = effectiveBudget(ServerConfig.emitterPushRate);
         for (Direction side : Direction.values()) {
-            int rem = budget - forwardedThisTick;
+            int rem = budget - feForwardedThisTick;
             if (rem <= 0) break;
             BlockEntity neighbor = level.getBlockEntity(worldPosition.relative(side));
             if (neighbor == null) continue;
@@ -842,7 +918,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
             int forwarded = forwardToChannel(simulated, false);
             if (forwarded <= 0) continue;
             source.extractEnergy(forwarded, false);
-            forwardedThisTick += forwarded;
+            feForwardedThisTick += forwarded;
         }
     }
 
@@ -876,13 +952,12 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         itemsTickPhase = 0;
 
         int batch = Math.min(net.itemConfig().batchSize(), com.quantumchanneling.ServerConfig.itemsMaxBatch);
+        // The helper now records routed amounts directly on the emitter (and the receiver) via
+        // recordItemsRouted, so we just use its return value as the activity signal — no counter
+        // mutation here. The previous version overwrote the FE counter with item stack count, which
+        // is why the UI showed item movements on the Energy tab.
         int moved = ItemTransitHelper.pullFromAdjacentAndRoute(level, this, net, batch);
-        if (moved > 0) {
-            forwardedThisTick = moved;
-            itemsSlowMode = false;   // activity → stay fast
-        } else {
-            itemsSlowMode = true;    // dry scan → coast for ~1 s before retrying
-        }
+        itemsSlowMode = (moved <= 0);    // activity → stay fast; dry scan → coast ~1 s
     }
 
     /**

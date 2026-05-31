@@ -92,7 +92,8 @@ public final class FluidTransitHelper {
         return out;
     }
 
-    /** Decide → execute. VOID consumes the whole stack; REJECT returns it; ROUTE pushes. */
+    /** Decide → execute. VOID consumes the whole stack; REJECT returns it; ROUTE pushes.
+     *  Capability-pushed route: no known source, so loop detection is off here. */
     public static FluidStack route(ServerLevel level, PhotonEmitterBlockEntity emitter,
                                    QuantumChannel channel, FluidStack stack, IFluidHandler.FluidAction action) {
         Decision d = emitter.decideFluid(channel, stack);
@@ -100,12 +101,13 @@ public final class FluidTransitHelper {
             case VOID: return FluidStack.EMPTY;
             case REJECT: return stack;
             case ROUTE: {
-                FluidStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, action);
+                FluidStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, action, null);
                 if (action.execute()) {
                     int moved = stack.getAmount() - leftover.getAmount();
                     if (moved > 0) {
                         FluidSubchannel sub = emitter.fluidSubchannel(d.subchannelId);
                         if (sub != null) sub.recordRouted(moved);
+                        emitter.recordFluidsRouted(moved);
                     }
                 }
                 return leftover;
@@ -114,10 +116,16 @@ public final class FluidTransitHelper {
         }
     }
 
+    /**
+     * @param sourceBlockPos Same purpose as {@code ItemTransitHelper.pushToReceivers}: when
+     *                       non-null, a same-block-as-source push is treated as a loop, skipped,
+     *                       and recorded on the emitter for UI display.
+     */
     private static FluidStack pushToReceivers(MinecraftServer server,
                                               PhotonEmitterBlockEntity emitter,
                                               QuantumChannel channel,
-                                              UUID subchannelId, FluidStack stack, IFluidHandler.FluidAction action) {
+                                              UUID subchannelId, FluidStack stack, IFluidHandler.FluidAction action,
+                                              @Nullable BlockPos sourceBlockPos) {
         List<PhotonReceiverBlockEntity> targets = loadedReceiversFor(server, channel, subchannelId);
         if (targets.isEmpty()) return stack;
         if (emitter.getFluidDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
@@ -136,17 +144,32 @@ public final class FluidTransitHelper {
             long key = rcv.getBlockPos().asLong();
             if (emitter.isFluidReceiverCooledDown(key, now)) continue;
             int before = remaining.getAmount();
-            remaining = pushToAdjacentTanks(rcv, remaining, action);
+            boolean sameDimension = sourceBlockPos != null
+                    && emitter.getLevel() != null && rcv.getLevel() != null
+                    && emitter.getLevel().dimension().equals(rcv.getLevel().dimension());
+            BlockPos forbidden = sameDimension ? sourceBlockPos : null;
+            remaining = pushToAdjacentTanks(rcv, remaining, action, emitter, forbidden);
             if (action.execute()) {
                 int delivered = before - remaining.getAmount();
-                if (delivered > 0) emitter.clearFluidReceiverCooldown(key);
-                else               emitter.markFluidReceiverRejected(key, now);
+                if (delivered > 0) {
+                    emitter.clearFluidReceiverCooldown(key);
+                    rcv.recordFluidsRouted(delivered);
+                } else {
+                    emitter.markFluidReceiverRejected(key, now);
+                }
             }
         }
         return remaining;
     }
 
     public static FluidStack pushToAdjacentTanks(ChannelBoundBlockEntity origin, FluidStack stack, IFluidHandler.FluidAction action) {
+        return pushToAdjacentTanks(origin, stack, action, null, null);
+    }
+
+    public static FluidStack pushToAdjacentTanks(ChannelBoundBlockEntity origin, FluidStack stack,
+                                                 IFluidHandler.FluidAction action,
+                                                 @Nullable PhotonEmitterBlockEntity reportingEmitter,
+                                                 @Nullable BlockPos forbiddenPos) {
         if (stack.isEmpty()) return stack;
         var level = origin.getLevel();
         if (level == null) return stack;
@@ -160,7 +183,13 @@ public final class FluidTransitHelper {
             if (remaining.isEmpty()) break;
             Direction side = sides[(startIdx + i) % sides.length];
             if (!origin.isFluidSideArmed(side)) continue;
-            BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
+            BlockPos neighborPos = origin.getBlockPos().relative(side);
+            // Same-block loop guard. See ItemTransitHelper.pushToAdjacentInventory.
+            if (forbiddenPos != null && forbiddenPos.equals(neighborPos)) {
+                if (action.execute() && reportingEmitter != null) reportingEmitter.markLoopDetected();
+                continue;
+            }
+            BlockEntity neighbor = level.getBlockEntity(neighborPos);
             if (neighbor == null) continue;
             IFluidHandler dest = neighbor.getCapability(ForgeCapabilities.FLUID_HANDLER, side.getOpposite()).orElse(null);
             if (dest == null) continue;
@@ -181,18 +210,20 @@ public final class FluidTransitHelper {
         BlockPos origin = emitter.getBlockPos();
         for (Direction side : Direction.values()) {
             if (!emitter.isFluidSideArmed(side)) continue;
-            BlockEntity neighbor = level.getBlockEntity(origin.relative(side));
+            BlockPos neighborPos = origin.relative(side);
+            BlockEntity neighbor = level.getBlockEntity(neighborPos);
             if (neighbor == null) continue;
             IFluidHandler src = neighbor.getCapability(ForgeCapabilities.FLUID_HANDLER, side.getOpposite()).orElse(null);
             if (src == null) continue;
-            int moved = scanAndRoute(level, emitter, channel, src, budget);
+            int moved = scanAndRoute(level, emitter, channel, src, budget, neighborPos);
             if (moved > 0) return moved;
         }
         return 0;
     }
 
     private static int scanAndRoute(ServerLevel level, PhotonEmitterBlockEntity emitter,
-                                    QuantumChannel channel, IFluidHandler src, int budget) {
+                                    QuantumChannel channel, IFluidHandler src, int budget,
+                                    BlockPos sourceBlockPos) {
         for (int tank = 0; tank < src.getTanks(); tank++) {
             FluidStack inTank = src.getFluidInTank(tank);
             if (inTank.isEmpty()) continue;
@@ -204,18 +235,21 @@ public final class FluidTransitHelper {
                 case REJECT -> { continue; }
                 case VOID -> {
                     FluidStack taken = src.drain(peek, IFluidHandler.FluidAction.EXECUTE);
-                    return taken.getAmount();
+                    int moved = taken.getAmount();
+                    if (moved > 0) emitter.recordFluidsRouted(moved);
+                    return moved;
                 }
                 case ROUTE -> {
-                    FluidStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, IFluidHandler.FluidAction.SIMULATE);
+                    FluidStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, IFluidHandler.FluidAction.SIMULATE, sourceBlockPos);
                     int wouldMove = peek.getAmount() - simulated.getAmount();
                     if (wouldMove <= 0) continue;
                     FluidStack taken = src.drain(new FluidStack(peek, wouldMove), IFluidHandler.FluidAction.EXECUTE);
                     if (taken.isEmpty()) continue;
-                    FluidStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, IFluidHandler.FluidAction.EXECUTE);
+                    FluidStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, IFluidHandler.FluidAction.EXECUTE, sourceBlockPos);
                     // Drained-but-not-deposited would be a bug, but log-free path: just lose it.
                     int moved = taken.getAmount() - leftover.getAmount();
                     if (moved > 0) {
+                        emitter.recordFluidsRouted(moved);
                         FluidSubchannel sub = emitter.fluidSubchannel(d.subchannelId);
                         if (sub != null) sub.recordRouted(moved);
                     }

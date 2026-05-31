@@ -3,10 +3,8 @@ package com.quantumchanneling.block;
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.blockentity.PhotonStorageBlockEntity;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -28,7 +26,6 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.network.NetworkHooks;
 import org.jetbrains.annotations.Nullable;
-import org.joml.Vector3f;
 
 /**
  * Photon Storage block — one of five tiers (Copper / Iron / Gold / Diamond / Emerald) with
@@ -70,26 +67,10 @@ public class PhotonStorageBlock extends Block implements EntityBlock {
         return PhotonShape.shape(state);
     }
 
-    /**
-     * Cyan particles drifting around the storage, scaled by how full it is — empty storages stay
-     * quiet, full Tier-V batteries shimmer noticeably. The fill bars already glow emissively, so
-     * the particles add a "live" feel without competing for visual attention.
-     */
-    @Override
-    public void animateTick(BlockState state, Level level, BlockPos pos, RandomSource random) {
-        int fill;
-        try { fill = state.getValue(LEVEL); } catch (Exception e) { return; }
-        if (fill <= 0) return;
-        // Particle frequency scales with fill: empty = 0, full = ~one per tenth of a second.
-        int gate = Math.max(1, 16 - fill);
-        if (random.nextInt(gate) != 0) return;
-        Vector3f color = new Vector3f(0.31f, 0.86f, 0.94f);    // storage cyan
-        DustParticleOptions opts = new DustParticleOptions(color, 1.0f);
-        double x = pos.getX() + 0.5 + (random.nextDouble() - 0.5) * 0.55;
-        double y = pos.getY() + 0.3 + random.nextDouble() * 0.5;
-        double z = pos.getZ() + 0.5 + (random.nextDouble() - 0.5) * 0.55;
-        level.addParticle(opts, x, y, z, 0, 0.02, 0);
-    }
+    // No animateTick — the BER (PhotonNodeRenderer) provides the visual idle animation via the
+    // GLSL shader with the per-tier accent color picked by PhotonAccent. The fill-level model
+    // bars still glow emissively to indicate stored amount; dust particles would compete with
+    // the shader for visual attention.
 
     @Override
     public BlockState rotate(BlockState state, Rotation rot) {
