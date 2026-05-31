@@ -1,6 +1,6 @@
 package com.quantumchanneling.channel;
 
-import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
+import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
@@ -11,12 +11,12 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
- * Client → server: reorder one device's subchannel subscription up ({@code direction = -1}) or
- * down ({@code direction = +1}) in the priority list. No-op for receivers (order is decorative).
+ * Client → server: reorder one of {@code emitterPos}'s item subchannels up ({@code direction = -1})
+ * or down ({@code direction = +1}) in the iteration order — i.e. the routing priority.
  */
-public record MoveDeviceSubchannelPacket(BlockPos pos, UUID subId, int direction) {
+public record MoveDeviceSubchannelPacket(BlockPos emitterPos, UUID subId, int direction) {
     public static void encode(MoveDeviceSubchannelPacket p, FriendlyByteBuf b) {
-        b.writeBlockPos(p.pos);
+        b.writeBlockPos(p.emitterPos);
         b.writeUUID(p.subId);
         b.writeVarInt(p.direction);
     }
@@ -27,14 +27,11 @@ public record MoveDeviceSubchannelPacket(BlockPos pos, UUID subId, int direction
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
-            if (player == null) return;
-            double dx = p.pos.getX() + 0.5 - player.getX();
-            double dy = p.pos.getY() + 0.5 - player.getY();
-            double dz = p.pos.getZ() + 0.5 - player.getZ();
-            if (dx * dx + dy * dy + dz * dz > 64.0) return;
-            BlockEntity be = player.level().getBlockEntity(p.pos);
-            if (be instanceof ChannelBoundBlockEntity bound) {
-                bound.moveSubscribedSubchannel(p.subId, p.direction);
+            if (player == null || !PacketUtil.withinReach(player, p.emitterPos)) return;
+            BlockEntity be = player.level().getBlockEntity(p.emitterPos);
+            if (!(be instanceof PhotonEmitterBlockEntity em)) return;
+            if (em.moveItemSubchannel(p.subId, p.direction)) {
+                CreateChannelPacket.sendListBackTo(player);
             }
         });
         ctx.setPacketHandled(true);

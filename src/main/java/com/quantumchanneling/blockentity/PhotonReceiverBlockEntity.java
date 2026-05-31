@@ -216,8 +216,9 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
         recordSample(lastTickThroughput);
         forwardedThisTick = 0;
 
-        // Re-scan adjacency every second — see PhotonEmitterBlockEntity.serverTick for the rationale.
-        if ((level.getGameTime() % 20) == 0) {
+        // Re-scan adjacency every second, staggered by position hash so receivers don't all
+        // refresh on the same tick. See PhotonEmitterBlockEntity for the rationale.
+        if (((level.getGameTime() + Math.floorMod(getBlockPos().hashCode(), 20)) % 20) == 0) {
             var pos = getBlockPos();
             var state = getBlockState();
             var updated = com.quantumchanneling.block.PhotonShape.refreshConnections(

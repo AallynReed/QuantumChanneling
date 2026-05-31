@@ -9,10 +9,6 @@ import net.minecraftforge.fml.event.config.ModConfigEvent;
 public class Config {
     private static final ForgeConfigSpec.Builder BUILDER = new ForgeConfigSpec.Builder();
 
-    private static final ForgeConfigSpec.BooleanValue ALLOW_CROSS_DIMENSION = BUILDER
-            .comment("Whether a quantum channel may link emitters and receivers across dimensions.")
-            .define("allowCrossDimension", true);
-
     private static final ForgeConfigSpec.IntValue EMITTER_PUSH_RATE = BUILDER
             .comment("Maximum FE a Photon Emitter pushes through its channel to receivers per tick.",
                      "0 = unlimited (default). FE is the universal energy currency in Forge 1.20.1;",
@@ -38,7 +34,6 @@ public class Config {
 
     static final ForgeConfigSpec SPEC = BUILDER.build();
 
-    public static boolean allowCrossDimension;
     public static int emitterPushRate;
     public static int receiverOutputRate;
     /** Index = tier - 1. Populated on config load. */
@@ -46,7 +41,6 @@ public class Config {
 
     @SubscribeEvent
     static void onLoad(final ModConfigEvent event) {
-        allowCrossDimension = ALLOW_CROSS_DIMENSION.get();
         emitterPushRate = EMITTER_PUSH_RATE.get();
         receiverOutputRate = RECEIVER_OUTPUT_RATE.get();
         storageCapacities = new long[]{

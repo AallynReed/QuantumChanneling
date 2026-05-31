@@ -202,6 +202,16 @@ public final class ModMessages {
         CHANNEL.messageBuilder(MoveDeviceGasSubchannelPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
                 .encoder(MoveDeviceGasSubchannelPacket::encode).decoder(MoveDeviceGasSubchannelPacket::decode)
                 .consumerMainThread(MoveDeviceGasSubchannelPacket::handle).add();
+
+        // Per-device dispatch strategy (round-robin vs serve-first) for items / fluids / gas.
+        CHANNEL.messageBuilder(SetDispatchStrategyPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetDispatchStrategyPacket::encode).decoder(SetDispatchStrategyPacket::decode)
+                .consumerMainThread(SetDispatchStrategyPacket::handle).add();
+
+        // Server config snapshot sent on login + on config reload.
+        CHANNEL.messageBuilder(SyncServerConfigPacket.class, id++, NetworkDirection.PLAY_TO_CLIENT)
+                .encoder(SyncServerConfigPacket::encode).decoder(SyncServerConfigPacket::decode)
+                .consumerMainThread(SyncServerConfigPacket::handle).add();
     }
 
     public static void sendToServer(Object msg) { CHANNEL.sendToServer(msg); }

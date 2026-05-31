@@ -210,6 +210,7 @@ public class QuantumChanneling {
         }
 
         context.registerConfig(ModConfig.Type.COMMON, Config.SPEC);
+        context.registerConfig(ModConfig.Type.SERVER, ServerConfig.SPEC);
 
         // Validate forced-chunk tickets on world load. Keep all of them — owning BlockEntities
         // re-sync their own ticket state on onLoad(), which cleans up any orphan in either direction.
@@ -221,7 +222,7 @@ public class QuantumChanneling {
     private void commonSetup(final FMLCommonSetupEvent event) {
         event.enqueueWork(ModMessages::register);
         LOGGER.info("Quantum Channeling: common setup complete (emitter push = {} FE/t, receiver out = {} FE/t, cross-dim = {})",
-                Config.emitterPushRate, Config.receiverOutputRate, Config.allowCrossDimension);
+                Config.emitterPushRate, Config.receiverOutputRate, ServerConfig.allowCrossDimension);
     }
 
     @SubscribeEvent

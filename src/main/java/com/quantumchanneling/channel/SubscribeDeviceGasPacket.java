@@ -1,9 +1,7 @@
 package com.quantumchanneling.channel;
 
-import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
-import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
+import com.quantumchanneling.blockentity.PhotonReceiverBlockEntity;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.GlobalPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -12,9 +10,12 @@ import net.minecraftforge.network.NetworkEvent;
 import java.util.UUID;
 import java.util.function.Supplier;
 
+/** Client → server: toggle a receiver's subscription to a gas subchannel. */
 public record SubscribeDeviceGasPacket(BlockPos pos, UUID subId, boolean subscribe) {
     public static void encode(SubscribeDeviceGasPacket p, FriendlyByteBuf b) {
-        b.writeBlockPos(p.pos); b.writeUUID(p.subId); b.writeBoolean(p.subscribe);
+        b.writeBlockPos(p.pos);
+        b.writeUUID(p.subId);
+        b.writeBoolean(p.subscribe);
     }
     public static SubscribeDeviceGasPacket decode(FriendlyByteBuf b) {
         return new SubscribeDeviceGasPacket(b.readBlockPos(), b.readUUID(), b.readBoolean());
@@ -23,28 +24,13 @@ public record SubscribeDeviceGasPacket(BlockPos pos, UUID subId, boolean subscri
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
-            if (player == null) return;
-            double dx = p.pos.getX() + 0.5 - player.getX();
-            double dy = p.pos.getY() + 0.5 - player.getY();
-            double dz = p.pos.getZ() + 0.5 - player.getZ();
-            if (dx * dx + dy * dy + dz * dz > 64.0) return;
+            if (player == null || !PacketUtil.withinReach(player, p.pos)) return;
             BlockEntity be = player.level().getBlockEntity(p.pos);
-            if (!(be instanceof ChannelBoundBlockEntity bound)) return;
+            if (!(be instanceof PhotonReceiverBlockEntity rcv)) return;
             boolean changed = p.subscribe
-                    ? bound.addSubscribedGasSubchannel(p.subId)
-                    : bound.removeSubscribedGasSubchannel(p.subId);
-            if (!changed) return;
-            if (be instanceof PhotonEmitterBlockEntity && bound.getChannelId() != null) {
-                ChannelData data = ChannelData.get(player.serverLevel().getServer());
-                QuantumChannel ch = data.getChannel(bound.getChannelId());
-                if (ch != null) {
-                    GlobalPos here = GlobalPos.of(player.serverLevel().dimension(), p.pos);
-                    if (p.subscribe) ch.registerEmitterGasSubscription(here, p.subId);
-                    else ch.unregisterEmitterGasSubscription(here, p.subId);
-                    data.setDirty();
-                }
-            }
-            CreateChannelPacket.sendListBackTo(player);
+                    ? rcv.addSubscribedGasSubchannel(p.subId)
+                    : rcv.removeSubscribedGasSubchannel(p.subId);
+            if (changed) CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);
     }

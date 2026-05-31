@@ -2,18 +2,28 @@ package com.quantumchanneling.client;
 
 import net.minecraftforge.fml.ModList;
 
-/** Tiny runtime feature-detection helper. Kept on the client because UI tabs are the only consumer. */
+/**
+ * Tiny runtime feature-detection helper. ModList lookups are cheap but happen on hot paths
+ * (every emitter tick checks {@link #mekanismLoaded()}), so the results are cached on first
+ * access. The set of loaded mods doesn't change after FMLCommonSetupEvent, so caching is safe.
+ */
 public final class Compat {
     private Compat() {}
 
-    /** True when the Curios mod is loaded. Treated as "Baubles" by the UI. */
+    private static Boolean curios;
+    private static Boolean mekanism;
+
     public static boolean curiosLoaded() {
-        return ModList.get().isLoaded("curios");
+        Boolean v = curios;
+        if (v == null) { v = ModList.get().isLoaded("curios"); curios = v; }
+        return v;
     }
 
     /** True when Mekanism is loaded — provider for both the gas (IGasHandler) and heat (IHeatHandler) APIs. */
     public static boolean mekanismLoaded() {
-        return ModList.get().isLoaded("mekanism");
+        Boolean v = mekanism;
+        if (v == null) { v = ModList.get().isLoaded("mekanism"); mekanism = v; }
+        return v;
     }
 
     /**

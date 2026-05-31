@@ -19,7 +19,6 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -68,17 +67,15 @@ public final class ItemTransitHelper {
                                     QuantumChannel channel,
                                     ItemStack stack) {
         if (stack == null || stack.isEmpty()) return Decision.REJECT;
-        // Step 1 — void. matches()=false ⇒ "filter rejects this item" ⇒ "void it".
+        // Void filter wins first — matches()=false means the user marked this item for voiding.
         if (!emitter.voidFilter().matches(stack)) return Decision.VOID;
-        // Step 2 — priority walk.
-        Set<UUID> subs = emitter.getSubscribedSubchannels();
-        if (subs.isEmpty()) return Decision.REJECT;
-        for (UUID subId : subs) {
-            ItemSubchannel sub = channel.itemConfig().subchannel(subId);
-            if (sub == null) continue;
+        // Walk the emitter's own subchannels in declaration order. First match with a live
+        // subscribed receiver wins.
+        if (emitter.itemSubchannelCount() == 0) return Decision.REJECT;
+        for (ItemSubchannel sub : emitter.itemSubchannels()) {
             if (!sub.filter().matches(stack)) continue;
-            if (server != null && !hasLoadedReceiverFor(server, channel, subId)) continue;
-            return Decision.route(subId);
+            if (server != null && !hasLoadedReceiverFor(server, channel, sub.id())) continue;
+            return Decision.route(sub.id());
         }
         return Decision.REJECT;
     }
@@ -129,14 +126,17 @@ public final class ItemTransitHelper {
         return switch (d.kind) {
             case VOID -> ItemStack.EMPTY;
             case REJECT -> stack;
-            case ROUTE -> pushToReceivers(level.getServer(), channel, d.subchannelId, stack, simulate);
+            case ROUTE -> pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, simulate);
         };
     }
 
-    private static ItemStack pushToReceivers(MinecraftServer server, QuantumChannel channel,
+    private static ItemStack pushToReceivers(MinecraftServer server,
+                                             PhotonEmitterBlockEntity emitter,
+                                             QuantumChannel channel,
                                              UUID subchannelId, ItemStack stack, boolean simulate) {
         List<PhotonReceiverBlockEntity> targets = loadedReceiversFor(server, channel, subchannelId);
         if (targets.isEmpty()) return stack;
+        targets = applyEmitterDispatch(emitter, targets, simulate);
         ItemStack remaining = stack;
         for (PhotonReceiverBlockEntity rcv : targets) {
             if (remaining.isEmpty()) break;
@@ -145,14 +145,37 @@ public final class ItemTransitHelper {
         return remaining;
     }
 
-    /** Pushes {@code stack} into the first willing adjacent {@link IItemHandler}; returns unaccepted. */
+    /** Rotates the target list according to the emitter's item dispatch strategy. */
+    private static List<PhotonReceiverBlockEntity> applyEmitterDispatch(
+            PhotonEmitterBlockEntity emitter, List<PhotonReceiverBlockEntity> targets, boolean simulate) {
+        if (targets.size() <= 1) return targets;
+        if (emitter.getItemDispatch() != com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN) return targets;
+        int start = simulate
+                ? Math.floorMod(emitter.takeItemRoundRobinIndex(targets.size()) - 1, targets.size())
+                : emitter.takeItemRoundRobinIndex(targets.size());
+        List<PhotonReceiverBlockEntity> rotated = new ArrayList<>(targets.size());
+        for (int i = 0; i < targets.size(); i++) rotated.add(targets.get((start + i) % targets.size()));
+        return rotated;
+    }
+
+    /**
+     * Pushes {@code stack} into adjacent {@link IItemHandler}s, walking the 6 sides in the order
+     * dictated by {@code origin.getItemDispatch()}. SERVE_FIRST keeps the natural Direction order;
+     * ROUND_ROBIN rotates the starting side so reach-fills spread out over many ticks.
+     */
     public static ItemStack pushToAdjacentInventory(ChannelBoundBlockEntity origin, ItemStack stack, boolean simulate) {
         if (stack.isEmpty()) return stack;
         var level = origin.getLevel();
         if (level == null) return stack;
+        Direction[] sides = Direction.values();
+        int startIdx = (origin.getItemDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
+                && !simulate)
+                ? origin.takeItemRoundRobinIndex(sides.length)
+                : 0;
         ItemStack remaining = stack;
-        for (Direction side : Direction.values()) {
+        for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
+            Direction side = sides[(startIdx + i) % sides.length];
             BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
             if (neighbor == null) continue;
             IItemHandler dest = neighbor.getCapability(ForgeCapabilities.ITEM_HANDLER, side.getOpposite()).orElse(null);
@@ -201,12 +224,12 @@ public final class ItemTransitHelper {
                     return taken.getCount();
                 }
                 case ROUTE -> {
-                    ItemStack simulated = pushToReceivers(level.getServer(), channel, d.subchannelId, peek, true);
+                    ItemStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, true);
                     int wouldMove = peek.getCount() - simulated.getCount();
                     if (wouldMove <= 0) continue;
                     ItemStack taken = src.extractItem(slot, wouldMove, false);
                     if (taken.isEmpty()) continue;
-                    ItemStack leftover = pushToReceivers(level.getServer(), channel, d.subchannelId, taken, false);
+                    ItemStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, false);
                     if (!leftover.isEmpty()) src.insertItem(slot, leftover, false);
                     return taken.getCount() - leftover.getCount();
                 }

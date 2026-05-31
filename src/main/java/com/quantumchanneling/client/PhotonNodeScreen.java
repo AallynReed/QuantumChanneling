@@ -267,13 +267,19 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     }
 
     public void onChannelsRefreshed(List<ChannelInfo> latest) {
+        // Avoid clobbering EditBox state on every poll — only rebuild when something actually
+        // changed for the channel we're showing. Otherwise the label / status text updates
+        // through the data flow but the widgets stay intact.
+        ChannelInfo prevCurrent = currentChannel;
         this.channels = new ArrayList<>(latest);
         resolveCurrentChannel();
         if (selectedInList != null) {
             this.selectedInList = channels.stream()
                     .filter(c -> c.id().equals(selectedInList.id())).findFirst().orElse(null);
         }
-        rebuildAll();
+        boolean structuralChange = (prevCurrent == null) != (currentChannel == null)
+                || (prevCurrent != null && currentChannel != null && !prevCurrent.equals(currentChannel));
+        if (structuralChange) rebuildAll();
     }
 
     private void resolveCurrentChannel() {
@@ -507,17 +513,25 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         int rw = BG_W - 16;
         int bottomY = topPos + BG_H - 24;
 
-        // Type a player name, hit Enter (or click away) to add. Role toggle picks USER vs ADMIN.
-        addPlayerInput = new EditBox(font, cx, bottomY, rw - 56, 16, Component.literal(""));
+        // Three controls on the bottom row: name input, role toggle (USER ⇄ ADMIN), explicit Add
+        // button. The role toggle only flips the role for the next add — it never sends a packet
+        // itself. Add is the only path that actually creates the permission entry.
+        int roleW = 52;
+        int addW = 44;
+        addPlayerInput = new EditBox(font, cx, bottomY, rw - roleW - addW - 4, 16, Component.literal(""));
         addPlayerInput.setHint(Component.translatable("gui.quantumchanneling.channels.player_hint"));
         addPlayerInput.setMaxLength(32);
         addRenderableWidget(addPlayerInput);
 
-        roleButton = PhotonButton.of(cx + rw - 52, bottomY - 1, 52, 18, roleButtonLabel(), b -> {
+        roleButton = PhotonButton.of(cx + rw - roleW - addW - 2, bottomY - 1, roleW, 18, roleButtonLabel(), b -> {
                     addPlayerRole = addPlayerRole == Permission.USER ? Permission.ADMIN : Permission.USER;
                     if (roleButton != null) roleButton.setMessage(roleButtonLabel());
                 }, this::accentColor);
         addRenderableWidget(roleButton);
+
+        addRenderableWidget(PhotonButton.of(cx + rw - addW, bottomY - 1, addW, 18,
+                Component.translatable("gui.quantumchanneling.channels.role.add"),
+                b -> applyAddPlayer(), this::accentColor));
     }
 
     private Component roleButtonLabel() {
@@ -657,9 +671,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         renderActiveTabContent(gfx, mouseX, mouseY);
         renderSideTabs(gfx, mouseX, mouseY);
         renderChannelInfoSidebar(gfx, mouseX, mouseY);
-        // The old full-screen coming-soon blocker is gone: when activeMode is FLUIDS/GASES, only
-        // the Charge/Filters tab content is replaced (see renderFiltersComingSoon). All other tabs
-        // (Status, Tune, Nodes, Stats, Access, Setup, Forge) remain interactive.
+        // HEAT and locked (mod-missing) modes still get a content-area splash via
+        // renderFiltersComingSoon. Items / Fluids / Gas have full panels when their provider mod is
+        // present; other tabs (Status, Tune, Nodes, Stats, Access, Setup, Forge) are always interactive.
         renderConfirmModal(gfx, mouseX, mouseY);
         renderTooltip(gfx, mouseX, mouseY);
     }
@@ -780,8 +794,12 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
     @Override
     protected void renderLabels(GuiGraphics gfx, int mouseX, int mouseY) {
-        // Title (block name or custom device name) — left-aligned.
-        String left = menu.getDeviceName().isEmpty() ? title.getString() : menu.getDeviceName();
+        // Title — prefer the live name from the current ChannelInfo so renaming the device updates
+        // the header without reopening. Fall back to the constructor-time menu copy, then the block name.
+        ChannelInfo.MemberPos here = findThisDevice();
+        String liveName = here != null ? here.customName() : "";
+        String left = !liveName.isEmpty() ? liveName
+                : (menu.getDeviceName().isEmpty() ? title.getString() : menu.getDeviceName());
         gfx.drawString(font, left, 8, 5, 0xFFFFFF, false);
 
         // Channel name + color swatch — right-aligned in the title bar. Unbound = grey "—".
@@ -1100,12 +1118,14 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         cy = drawChInfoFormatted(gfx, contentX, cy,
                 "gui.quantumchanneling.stats.total_output", totalOut, totalOut * 20);
 
-        // Mode-relevant subsections: energy → charging slots + players + charge activity;
-        // items → items config + subchannel list with subscriber counts; fluids/gases → placeholder.
+        // Energy / items / fluids / gas each render their own summary block. Heat stays in the
+        // "coming soon" placeholder until the thermal-wire design is finished.
         cy = switch (activeMode) {
             case ENERGY -> renderEnergyInfoSections(gfx, contentX, cy);
             case ITEMS  -> renderItemsInfoSections(gfx, contentX, cy);
-            case FLUIDS, GASES, HEAT -> renderComingSoonInfoSection(gfx, contentX, cy);
+            case FLUIDS -> renderFluidsInfoSections(gfx, contentX, cy);
+            case GASES  -> renderGasInfoSections(gfx, contentX, cy);
+            case HEAT   -> renderComingSoonInfoSection(gfx, contentX, cy);
         };
 
         gfx.disableScissor();
@@ -1197,66 +1217,166 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     }
 
     /**
-     * Items-mode subsections of the channel-info sidebar: enable state, subchannel list with
-     * filter mode + entry counts + emitter/receiver subscriber tallies, and this device's void
-     * filter summary when it's an emitter. Returns the next y-cursor.
+     * Items-mode side panel. Walks every loaded emitter on the channel and lists the subchannels
+     * each one hosts, with a receiver-subscriber tally for each. Ends with this device's void
+     * filter summary when it's an emitter.
      */
     private int renderItemsInfoSections(GuiGraphics gfx, int contentX, int cy) {
-        ItemChannelConfig cfg = currentChannel.itemConfig();
-        cy += 4;
-        gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.items_header")
-                .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
-        cy += 12;
-        // Channel-level Routing: ON/OFF removed — items participation is now per-device. The
-        // subchannel list below is the channel-scoped view that's still meaningful.
+        cy = renderHostedSubchannelsBlock(gfx, contentX, cy,
+                "gui.quantumchanneling.channel.info.items_header",
+                ResourceMode.ITEMS);
 
-        cy += 4;
-        gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.subchannels_header")
-                .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
-        cy += 12;
-        if (cfg.subchannelCount() == 0) {
-            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.no_subchannels")
-                    .withStyle(ChatFormatting.GRAY), contentX + 4, cy, 0xFF888888, false);
-            cy += 11;
-        } else {
-            // One-time tally of how many emitters / receivers subscribe to each subchannel.
-            Map<UUID, int[]> tally = new HashMap<>();   // [emitters, receivers]
-            for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
-                boolean isEm = m.type() == ChannelInfo.TYPE_EMITTER;
-                boolean isRc = m.type() == ChannelInfo.TYPE_RECEIVER;
-                if (!isEm && !isRc) continue;
-                for (UUID sid : m.subscribedSubchannels()) {
-                    int[] t = tally.computeIfAbsent(sid, k -> new int[2]);
-                    if (isEm) t[0]++; else t[1]++;
-                }
-            }
-            for (ItemSubchannel sub : cfg.subchannels()) {
-                int[] t = tally.getOrDefault(sub.id(), new int[]{0, 0});
-                String mode = sub.filter().isWhitelist() ? "§aWL" : "§cBL";
-                gfx.drawString(font, Component.literal("• " + sub.name()),
-                        contentX + 4, cy, 0xFFFFFFFF, false);
-                cy += 10;
-                gfx.drawString(font, Component.translatable(
-                                "gui.quantumchanneling.channel.info.sub_detail_fmt",
-                                mode, sub.filter().size(), t[0], t[1]),
-                        contentX + 14, cy, 0xFFB0B8C0, false);
-                cy += 11;
-            }
-        }
-
-        // Per-emitter void filter — only relevant when this device is itself an emitter.
         ChannelInfo.MemberPos here = findThisDevice();
         if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) {
             cy += 4;
             gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.void_header")
                     .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
             cy += 12;
-            // Void is single-mode (items in list → voided), so no WL/BL prefix — just the count.
-            ItemFilter vf = here.voidFilter();
             cy = drawChInfoFormatted(gfx, contentX + 4, cy,
-                    "gui.quantumchanneling.channel.info.void_detail_fmt", vf.size());
+                    "gui.quantumchanneling.channel.info.void_detail_fmt", here.voidFilter().size());
         }
         return cy;
+    }
+
+    /** Fluids-mode side panel — same shape as the items one. */
+    private int renderFluidsInfoSections(GuiGraphics gfx, int contentX, int cy) {
+        cy = renderHostedSubchannelsBlock(gfx, contentX, cy,
+                "gui.quantumchanneling.channel.info.fluids_header",
+                ResourceMode.FLUIDS);
+
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) {
+            cy += 4;
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.void_header")
+                    .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
+            cy += 12;
+            cy = drawChInfoFormatted(gfx, contentX + 4, cy,
+                    "gui.quantumchanneling.channel.info.void_detail_fmt", here.fluidVoidFilter().size());
+        }
+        return cy;
+    }
+
+    /**
+     * Gas-mode side panel. When Mekanism is missing this still renders, but as a single grey
+     * "locked" line — the panel itself stays informative rather than dropping back to "coming soon".
+     */
+    private int renderGasInfoSections(GuiGraphics gfx, int contentX, int cy) {
+        if (isModeLocked(ResourceMode.GASES)) return renderComingSoonInfoSection(gfx, contentX, cy);
+        cy = renderHostedSubchannelsBlock(gfx, contentX, cy,
+                "gui.quantumchanneling.channel.info.gases_header",
+                ResourceMode.GASES);
+
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) {
+            cy += 4;
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.void_header")
+                    .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
+            cy += 12;
+            cy = drawChInfoFormatted(gfx, contentX + 4, cy,
+                    "gui.quantumchanneling.channel.info.void_detail_fmt", here.gasVoidFilter().size());
+        }
+        return cy;
+    }
+
+    /**
+     * Shared layout: header → "Hosted by Emitter X" group → each subchannel with WL/BL marker,
+     * filter entry count, and receiver-subscriber tally. {@code mode} picks which resource pool
+     * to iterate.
+     */
+    private int renderHostedSubchannelsBlock(GuiGraphics gfx, int contentX, int cy,
+                                             String headerKey, ResourceMode mode) {
+        cy += 4;
+        gfx.drawString(font, Component.translatable(headerKey)
+                .withStyle(ChatFormatting.AQUA), contentX, cy, 0xC8E0FF, false);
+        cy += 12;
+
+        // Receiver-subscriber tally per subchannel id, built once.
+        Map<UUID, Integer> rcvTally = new HashMap<>();
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() != ChannelInfo.TYPE_RECEIVER) continue;
+            List<UUID> set = switch (mode) {
+                case ITEMS  -> m.subscribedSubchannels();
+                case FLUIDS -> m.subscribedFluidSubchannels();
+                case GASES  -> m.subscribedGasSubchannels();
+                default     -> List.of();
+            };
+            for (UUID sid : set) rcvTally.merge(sid, 1, Integer::sum);
+        }
+
+        boolean anyHosted = false;
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() != ChannelInfo.TYPE_EMITTER) continue;
+            List<? extends NamedSubchannel> hosted = switch (mode) {
+                case ITEMS  -> namedView(m.itemSubchannels());
+                case FLUIDS -> namedView(m.fluidSubchannels());
+                case GASES  -> namedView(m.gasSubchannels());
+                default     -> List.of();
+            };
+            if (hosted.isEmpty()) continue;
+            anyHosted = true;
+            String label = m.customName().isEmpty()
+                    ? Component.translatable("gui.quantumchanneling.channel.info.emitter_label",
+                            m.pos().toShortString()).getString()
+                    : m.customName();
+            gfx.drawString(font, Component.literal("⌁ " + label),
+                    contentX + 2, cy, 0xFFFFE070, false);
+            cy += 11;
+            for (NamedSubchannel sub : hosted) {
+                int rcvCount = rcvTally.getOrDefault(sub.id(), 0);
+                String mark = sub.whitelist() ? "§aWL" : "§cBL";
+                gfx.drawString(font, Component.literal("• " + sub.name()),
+                        contentX + 14, cy, 0xFFFFFFFF, false);
+                cy += 10;
+                gfx.drawString(font, Component.translatable(
+                                "gui.quantumchanneling.channel.info.sub_detail_fmt",
+                                mark, sub.filterSize(), rcvCount),
+                        contentX + 24, cy, 0xFFB0B8C0, false);
+                cy += 11;
+            }
+        }
+        if (!anyHosted) {
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.info.no_subchannels")
+                    .withStyle(ChatFormatting.GRAY), contentX + 4, cy, 0xFF888888, false);
+            cy += 11;
+        }
+        return cy;
+    }
+
+    /** Adapter so the shared layout doesn't need three near-identical loops. */
+    private interface NamedSubchannel {
+        UUID id();
+        String name();
+        boolean whitelist();
+        int filterSize();
+    }
+
+    private static List<NamedSubchannel> namedView(List<? extends Object> subs) {
+        List<NamedSubchannel> out = new ArrayList<>(subs.size());
+        for (Object o : subs) {
+            if (o instanceof ItemSubchannel s) {
+                out.add(new NamedSubchannel() {
+                    public UUID id() { return s.id(); }
+                    public String name() { return s.name(); }
+                    public boolean whitelist() { return s.filter().isWhitelist(); }
+                    public int filterSize() { return s.filter().size(); }
+                });
+            } else if (o instanceof FluidSubchannel s) {
+                out.add(new NamedSubchannel() {
+                    public UUID id() { return s.id(); }
+                    public String name() { return s.name(); }
+                    public boolean whitelist() { return s.filter().isWhitelist(); }
+                    public int filterSize() { return s.filter().size(); }
+                });
+            } else if (o instanceof com.quantumchanneling.channel.GasSubchannel s) {
+                out.add(new NamedSubchannel() {
+                    public UUID id() { return s.id(); }
+                    public String name() { return s.name(); }
+                    public boolean whitelist() { return s.filter().isWhitelist(); }
+                    public int filterSize() { return s.filter().size(); }
+                });
+            }
+        }
+        return out;
     }
 
     /** Fluids / gases / heat side-panel placeholder. Locked variant calls out the missing mod. */
@@ -2282,7 +2402,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (eb == priorityInput) return this::applyPriority;
         if (eb == renameInput) return this::applyChannelRename;
         if (eb == pinInput) return this::applyChannelPin;
-        if (eb == addPlayerInput) return this::applyAddPlayer;
+        // addPlayerInput intentionally has no auto-apply: the Access tab has an explicit Add button.
+        // Otherwise focus-loss from clicking the role toggle would silently submit.
         return null;
     }
 
@@ -2338,7 +2459,17 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         }
         lastFocusedEditBox = nowFocused;
         resolveCurrentChannel();
+        // Real-time refresh: poll every 2 seconds. onChannelsRefreshed only triggers a widget
+        // rebuild when the snapshot actually changed, so a steady-state screen costs almost nothing
+        // beyond the periodic packet. Tuned to a longer interval than the original 1 s so a few
+        // open screens don't push noticeable bandwidth.
+        if (++refreshTickCounter >= 40) {
+            refreshTickCounter = 0;
+            ModMessages.sendToServer(new OpenChannelsRequestPacket());
+        }
     }
+
+    private int refreshTickCounter = 0;
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
@@ -2616,6 +2747,163 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return -1;
     }
 
+    /* ---- per-emitter subchannel resolution ----
+     * On an emitter the visible list is just its own subchannels. Anything else (receiver,
+     * storage, manager) sees the union from every loaded emitter on the channel — that's how
+     * a receiver picks which streams to listen to. */
+
+    private List<ItemSubchannel> visibleItemSubchannels() {
+        if (currentChannel == null) return List.of();
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) return here.itemSubchannels();
+        List<ItemSubchannel> out = new ArrayList<>();
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() == ChannelInfo.TYPE_EMITTER) out.addAll(m.itemSubchannels());
+        }
+        return out;
+    }
+
+    private @Nullable ItemSubchannel findVisibleItemSubchannel(UUID id) {
+        if (id == null) return null;
+        for (ItemSubchannel s : visibleItemSubchannels()) if (s.id().equals(id)) return s;
+        return null;
+    }
+
+    private @Nullable net.minecraft.core.BlockPos itemSubchannelOwner(UUID id) {
+        if (id == null || currentChannel == null) return null;
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() != ChannelInfo.TYPE_EMITTER) continue;
+            for (ItemSubchannel s : m.itemSubchannels()) if (s.id().equals(id)) return m.pos();
+        }
+        return null;
+    }
+
+    private List<FluidSubchannel> visibleFluidSubchannels() {
+        if (currentChannel == null) return List.of();
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) return here.fluidSubchannels();
+        List<FluidSubchannel> out = new ArrayList<>();
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() == ChannelInfo.TYPE_EMITTER) out.addAll(m.fluidSubchannels());
+        }
+        return out;
+    }
+
+    private @Nullable FluidSubchannel findVisibleFluidSubchannel(UUID id) {
+        if (id == null) return null;
+        for (FluidSubchannel s : visibleFluidSubchannels()) if (s.id().equals(id)) return s;
+        return null;
+    }
+
+    private @Nullable net.minecraft.core.BlockPos fluidSubchannelOwner(UUID id) {
+        if (id == null || currentChannel == null) return null;
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() != ChannelInfo.TYPE_EMITTER) continue;
+            for (FluidSubchannel s : m.fluidSubchannels()) if (s.id().equals(id)) return m.pos();
+        }
+        return null;
+    }
+
+    private List<com.quantumchanneling.channel.GasSubchannel> visibleGasSubchannels() {
+        if (currentChannel == null) return List.of();
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here != null && here.type() == ChannelInfo.TYPE_EMITTER) return here.gasSubchannels();
+        List<com.quantumchanneling.channel.GasSubchannel> out = new ArrayList<>();
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() == ChannelInfo.TYPE_EMITTER) out.addAll(m.gasSubchannels());
+        }
+        return out;
+    }
+
+    private @Nullable com.quantumchanneling.channel.GasSubchannel findVisibleGasSubchannel(UUID id) {
+        if (id == null) return null;
+        for (var s : visibleGasSubchannels()) if (s.id().equals(id)) return s;
+        return null;
+    }
+
+    private @Nullable net.minecraft.core.BlockPos gasSubchannelOwner(UUID id) {
+        if (id == null || currentChannel == null) return null;
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() != ChannelInfo.TYPE_EMITTER) continue;
+            for (var s : m.gasSubchannels()) if (s.id().equals(id)) return m.pos();
+        }
+        return null;
+    }
+
+    /**
+     * Create a new item subchannel on this emitter. Rejects empty names, case-insensitive
+     * duplicates, and either of the two server-enforced caps (per-emitter + per-channel). The
+     * server runs the same checks — these mirror them so the UI doesn't fire packets that the
+     * server is just going to drop on the floor.
+     */
+    private void sendCreateItemSubchannel() {
+        if (currentChannel == null || itemsNewSubInput == null) return;
+        String name = itemsNewSubInput.getValue().trim();
+        if (name.isEmpty()) return;
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here == null || here.type() != ChannelInfo.TYPE_EMITTER) return;
+        if (here.itemSubchannels().size() >= ClientServerConfig.itemsMaxSubsPerEmitter) return;
+        int channelTotal = 0;
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() == ChannelInfo.TYPE_EMITTER) channelTotal += m.itemSubchannels().size();
+        }
+        if (channelTotal >= ClientServerConfig.itemsMaxSubsPerChannel) return;
+        for (ItemSubchannel s : here.itemSubchannels()) {
+            if (s.name().equalsIgnoreCase(name)) return;
+        }
+        ModMessages.sendToServer(new CreateSubchannelPacket(menu.getBlockPos(), name));
+        itemsNewSubInput.setValue("");
+    }
+
+    private void sendCreateFluidSubchannel() {
+        if (currentChannel == null || fluidsNewSubInput == null) return;
+        String name = fluidsNewSubInput.getValue().trim();
+        if (name.isEmpty()) return;
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here == null || here.type() != ChannelInfo.TYPE_EMITTER) return;
+        if (here.fluidSubchannels().size() >= ClientServerConfig.fluidsMaxSubsPerEmitter) return;
+        int channelTotal = 0;
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() == ChannelInfo.TYPE_EMITTER) channelTotal += m.fluidSubchannels().size();
+        }
+        if (channelTotal >= ClientServerConfig.fluidsMaxSubsPerChannel) return;
+        for (FluidSubchannel s : here.fluidSubchannels()) {
+            if (s.name().equalsIgnoreCase(name)) return;
+        }
+        ModMessages.sendToServer(new CreateFluidSubchannelPacket(menu.getBlockPos(), name));
+        fluidsNewSubInput.setValue("");
+    }
+
+    private void sendCreateGasSubchannel() {
+        if (currentChannel == null || gasesNewSubInput == null) return;
+        String name = gasesNewSubInput.getValue().trim();
+        if (name.isEmpty()) return;
+        ChannelInfo.MemberPos here = findThisDevice();
+        if (here == null || here.type() != ChannelInfo.TYPE_EMITTER) return;
+        if (here.gasSubchannels().size() >= ClientServerConfig.gasesMaxSubsPerEmitter) return;
+        int channelTotal = 0;
+        for (ChannelInfo.MemberPos m : currentChannel.memberPositions()) {
+            if (m.type() == ChannelInfo.TYPE_EMITTER) channelTotal += m.gasSubchannels().size();
+        }
+        if (channelTotal >= ClientServerConfig.gasesMaxSubsPerChannel) return;
+        for (var s : here.gasSubchannels()) {
+            if (s.name().equalsIgnoreCase(name)) return;
+        }
+        ModMessages.sendToServer(new com.quantumchanneling.channel.CreateGasSubchannelPacket(menu.getBlockPos(), name));
+        gasesNewSubInput.setValue("");
+    }
+
+    /** Project the ordered subchannel list down to just its UUIDs, preserving order. */
+    private static List<UUID> orderedIds(List<? extends Object> subs) {
+        List<UUID> out = new ArrayList<>(subs.size());
+        for (Object o : subs) {
+            if (o instanceof ItemSubchannel s) out.add(s.id());
+            else if (o instanceof FluidSubchannel s) out.add(s.id());
+            else if (o instanceof com.quantumchanneling.channel.GasSubchannel s) out.add(s.id());
+        }
+        return out;
+    }
+
     public void acceptDroppedFilterItem(ResourceLocation id, int slotIdx) {
         if (currentChannel == null || !isItemsModeActive() || id == null) return;
         ItemFilter f = resolveCurrentFilter();
@@ -2668,19 +2956,26 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         addRenderableWidget(itemsNewSubInput);
         addRenderableWidget(PhotonButton.of(cx + rw - 40, topPos + CONTENT_TOP + 4, 40, 18,
                 Component.translatable("gui.quantumchanneling.items.new_sub_btn"),
-                b -> {
-                    if (currentChannel == null) return;
-                    String name = itemsNewSubInput != null ? itemsNewSubInput.getValue().trim() : "";
-                    if (name.isEmpty()) {
-                        name = "Sub " + (currentChannel.itemConfig().subchannelCount() + 1);
-                    }
-                    ModMessages.sendToServer(new CreateSubchannelPacket(currentChannel.id(), name));
-                    if (itemsNewSubInput != null) itemsNewSubInput.setValue("");
-                }, this::accentColor));
+                b -> sendCreateItemSubchannel(),
+                this::accentColor));
+
+        // Dispatch strategy — shown on emitter (controls receiver distribution) and on receiver
+        // (controls adjacent-inv distribution). Storage / manager devices have no dispatch surface.
+        if (here != null && (here.type() == ChannelInfo.TYPE_EMITTER || here.type() == ChannelInfo.TYPE_RECEIVER)) {
+            com.quantumchanneling.channel.DispatchStrategy curS = here.itemDispatch();
+            com.quantumchanneling.channel.DispatchStrategy nextS = curS.next();
+            addRenderableWidget(PhotonButton.of(cx, topPos + CONTENT_TOP + 50, 160, 18,
+                    Component.translatable("gui.quantumchanneling.dispatch.label",
+                            Component.translatable(curS.labelKey())),
+                    b -> ModMessages.sendToServer(
+                            new com.quantumchanneling.channel.SetDispatchStrategyPacket(
+                                    menu.getBlockPos(), (byte) 0, (byte) nextS.ordinal())),
+                    this::accentColor));
+        }
 
         // Editable targets = void (for emitters only) + every subchannel. With zero targets the
         // entire editor section collapses to a single empty-state message rendered later.
-        int subCount = currentChannel == null ? 0 : currentChannel.itemConfig().subchannelCount();
+        int subCount = currentChannel == null ? 0 : visibleItemSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         boolean hasEditTarget = cycleSize > 0;
         boolean showArrows = cycleSize > 1;
@@ -2711,7 +3006,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                     b -> sendToggleFilterMode(), this::accentColor));
         }
 
-        if (selectedSubchannelId != null && !editingVoid && here != null) {
+        // Subscribe only makes sense for receivers — emitters own their own subchannels.
+        if (!emitter && selectedSubchannelId != null && !editingVoid && here != null) {
             boolean subbed = here.subscribedSubchannels().contains(selectedSubchannelId);
             UUID subId = selectedSubchannelId;
             addRenderableWidget(PhotonButton.of(cx + 240, selY, 60, 18,
@@ -2729,15 +3025,17 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (selectedSubchannelId != null && !editingVoid && currentChannel != null) {
             UUID subId = selectedSubchannelId;
             // Delete-the-subchannel-from-the-channel button always available to the editor.
-            addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
-                    Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
-                    b -> ModMessages.sendToServer(new DeleteSubchannelPacket(currentChannel.id(), subId))));
+            net.minecraft.core.BlockPos owner = itemSubchannelOwner(subId);
+            if (owner != null) {
+                addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
+                        Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
+                        b -> ModMessages.sendToServer(new DeleteSubchannelPacket(owner, subId))));
+            }
 
-            // Priority reorder buttons — only meaningful when THIS emitter is subscribed to the
-            // currently-selected subchannel AND has at least one other subscription to swap with.
-            // The header is rendered in renderItemsPanel so it lines up after layout.
+            // Priority reorder buttons — only meaningful when this emitter owns the selected sub.
+            // The order being reordered is the emitter's own iteration order (= routing priority).
             if (emitter && here != null) {
-                java.util.List<UUID> mySubs = here.subscribedSubchannels();
+                java.util.List<UUID> mySubs = orderedIds(here.itemSubchannels());
                 int myIdx = mySubs.indexOf(subId);
                 int total = mySubs.size();
                 boolean canReorder = myIdx >= 0 && total >= 2;
@@ -2781,7 +3079,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         // centered empty-state instead of three overlapping labels + dead cycle arrows.
         ChannelInfo.MemberPos here = findThisDevice();
         boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
-        int subCount = currentChannel.itemConfig().subchannelCount();
+        int subCount = visibleItemSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         if (cycleSize == 0) {
             Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
@@ -2837,7 +3135,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
         // Priority row header — only when the reorder buttons are actually visible.
         if (emitter && here != null && !editingVoid && selectedSubchannelId != null) {
-            java.util.List<UUID> mySubs = here.subscribedSubchannels();
+            java.util.List<UUID> mySubs = orderedIds(here.itemSubchannels());
             int myIdx = mySubs.indexOf(selectedSubchannelId);
             if (myIdx >= 0 && mySubs.size() >= 2) {
                 gfx.drawString(font,
@@ -2848,7 +3146,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             }
         }
 
-        int n = currentChannel.itemConfig().subchannelCount();
+        int n = visibleItemSubchannels().size();
         gfx.drawString(font, Component.translatable("gui.quantumchanneling.items.sub_count", n),
                 cx, topPos + BG_H - 18, 0xFFB0B8C8, false);
     }
@@ -2891,7 +3189,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return;
         }
         if (selectedSubchannelId != null
-                && currentChannel.itemConfig().subchannel(selectedSubchannelId) != null) return;
+                && findVisibleItemSubchannel(selectedSubchannelId) != null) return;
         UUID first = firstSubchannelId();
         if (first != null) {
             selectedSubchannelId = first;
@@ -2907,7 +3205,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
     private @Nullable UUID firstSubchannelId() {
         if (currentChannel == null) return null;
-        for (var s : currentChannel.itemConfig().subchannels()) return s.id();
+        for (var s : visibleItemSubchannels()) return s.id();
         return null;
     }
 
@@ -2919,7 +3217,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return here.voidFilter();
         }
         if (selectedSubchannelId == null) return null;
-        ItemSubchannel sub = currentChannel.itemConfig().subchannel(selectedSubchannelId);
+        ItemSubchannel sub = findVisibleItemSubchannel(selectedSubchannelId);
         return sub == null ? null : sub.filter();
     }
 
@@ -2931,7 +3229,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (selectedSubchannelId == null) {
             return Component.translatable("gui.quantumchanneling.items.no_subs");
         }
-        ItemSubchannel sub = currentChannel.itemConfig().subchannel(selectedSubchannelId);
+        ItemSubchannel sub = findVisibleItemSubchannel(selectedSubchannelId);
         String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
         return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
     }
@@ -2941,7 +3239,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         boolean emitter = isCurrentEmitter();
         java.util.List<Object> cycle = new java.util.ArrayList<>();
         if (emitter) cycle.add("VOID");
-        for (var s : currentChannel.itemConfig().subchannels()) cycle.add(s.id());
+        for (var s : visibleItemSubchannels()) cycle.add(s.id());
         if (cycle.isEmpty()) return;
         int idx = -1;
         for (int i = 0; i < cycle.size(); i++) {
@@ -2963,13 +3261,26 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return here != null && here.type() == ChannelInfo.TYPE_EMITTER;
     }
 
+    /**
+     * Cached lookup for "the MemberPos that represents the device this menu was opened on". The
+     * underlying scan is O(memberCount), and several render-path callers ask for it per frame —
+     * so we hold a reference to the resolved entry plus the {@link ChannelInfo} it came from. A
+     * different ChannelInfo (post-refresh) invalidates the cache automatically.
+     */
+    private @Nullable ChannelInfo cachedFindFor = null;
+    private @Nullable ChannelInfo.MemberPos cachedThisDevice = null;
+
     private @Nullable ChannelInfo.MemberPos findThisDevice() {
-        if (currentChannel == null) return null;
+        if (currentChannel == null) { cachedFindFor = null; cachedThisDevice = null; return null; }
+        if (cachedFindFor == currentChannel) return cachedThisDevice;
         var pos = menu.getBlockPos();
+        ChannelInfo.MemberPos found = null;
         for (var m : currentChannel.memberPositions()) {
-            if (m.pos().equals(pos)) return m;
+            if (m.pos().equals(pos)) { found = m; break; }
         }
-        return null;
+        cachedFindFor = currentChannel;
+        cachedThisDevice = found;
+        return found;
     }
 
     private static @Nullable ResourceLocation filterItemAtSlot(ItemFilter f, int slotIdx) {
@@ -2987,8 +3298,10 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (editingVoid) {
             ModMessages.sendToServer(new AddEmitterVoidItemPacket(menu.getBlockPos(), id));
         } else if (selectedSubchannelId != null) {
-            ModMessages.sendToServer(new AddSubchannelItemPacket(
-                    currentChannel.id(), selectedSubchannelId, id));
+            net.minecraft.core.BlockPos owner = itemSubchannelOwner(selectedSubchannelId);
+            if (owner != null) {
+                ModMessages.sendToServer(new AddSubchannelItemPacket(owner, selectedSubchannelId, id));
+            }
         }
     }
 
@@ -2997,8 +3310,10 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (editingVoid) {
             ModMessages.sendToServer(new RemoveEmitterVoidItemPacket(menu.getBlockPos(), id));
         } else if (selectedSubchannelId != null) {
-            ModMessages.sendToServer(new RemoveSubchannelItemPacket(
-                    currentChannel.id(), selectedSubchannelId, id));
+            net.minecraft.core.BlockPos owner = itemSubchannelOwner(selectedSubchannelId);
+            if (owner != null) {
+                ModMessages.sendToServer(new RemoveSubchannelItemPacket(owner, selectedSubchannelId, id));
+            }
         }
     }
 
@@ -3008,8 +3323,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (editingVoid || selectedSubchannelId == null) return;
         ItemFilter cur = resolveCurrentFilter();
         if (cur == null) return;
-        ModMessages.sendToServer(new SetSubchannelFilterModePacket(
-                currentChannel.id(), selectedSubchannelId, !cur.isWhitelist()));
+        net.minecraft.core.BlockPos owner = itemSubchannelOwner(selectedSubchannelId);
+        if (owner == null) return;
+        ModMessages.sendToServer(new SetSubchannelFilterModePacket(owner, selectedSubchannelId, !cur.isWhitelist()));
     }
 
     /* ===================== Fluids panel (clone of items, vanilla IFluidHandler) ===================== */
@@ -3027,7 +3343,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return null;
         }
         if (selectedFluidSubchannelId == null) return null;
-        FluidSubchannel sub = currentChannel.fluidConfig().subchannel(selectedFluidSubchannelId);
+        FluidSubchannel sub = findVisibleFluidSubchannel(selectedFluidSubchannelId);
         return sub == null ? null : sub.filter();
     }
 
@@ -3036,14 +3352,14 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return Component.translatable("gui.quantumchanneling.items.no_subs");
         }
         if (editingFluidVoid) return Component.translatable("gui.quantumchanneling.items.editing_void");
-        FluidSubchannel sub = currentChannel.fluidConfig().subchannel(selectedFluidSubchannelId);
+        FluidSubchannel sub = findVisibleFluidSubchannel(selectedFluidSubchannelId);
         String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
         return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
     }
 
     private @Nullable java.util.UUID firstFluidSubchannelId() {
         if (currentChannel == null) return null;
-        var it = currentChannel.fluidConfig().subchannels().iterator();
+        var it = visibleFluidSubchannels().iterator();
         return it.hasNext() ? it.next().id() : null;
     }
 
@@ -3054,7 +3370,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return;
         }
         if (selectedFluidSubchannelId != null
-                && currentChannel.fluidConfig().subchannel(selectedFluidSubchannelId) != null) return;
+                && findVisibleFluidSubchannel(selectedFluidSubchannelId) != null) return;
         java.util.UUID first = firstFluidSubchannelId();
         if (first != null) { selectedFluidSubchannelId = first; editingFluidVoid = false; }
         else if (isCurrentEmitter()) { editingFluidVoid = true; selectedFluidSubchannelId = null; }
@@ -3066,7 +3382,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         boolean emitter = isCurrentEmitter();
         java.util.List<Object> cycle = new java.util.ArrayList<>();
         if (emitter) cycle.add("VOID");
-        for (FluidSubchannel s : currentChannel.fluidConfig().subchannels()) cycle.add(s.id());
+        for (FluidSubchannel s : visibleFluidSubchannels()) cycle.add(s.id());
         if (cycle.isEmpty()) return;
         int idx = -1;
         if (editingFluidVoid) {
@@ -3093,7 +3409,10 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (editingFluidVoid) {
             ModMessages.sendToServer(new AddEmitterFluidVoidPacket(menu.getBlockPos(), id));
         } else if (selectedFluidSubchannelId != null) {
-            ModMessages.sendToServer(new AddSubchannelFluidPacket(currentChannel.id(), selectedFluidSubchannelId, id));
+            net.minecraft.core.BlockPos owner = fluidSubchannelOwner(selectedFluidSubchannelId);
+            if (owner != null) {
+                ModMessages.sendToServer(new AddSubchannelFluidPacket(owner, selectedFluidSubchannelId, id));
+            }
         }
     }
 
@@ -3102,7 +3421,10 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (editingFluidVoid) {
             ModMessages.sendToServer(new RemoveEmitterFluidVoidPacket(menu.getBlockPos(), id));
         } else if (selectedFluidSubchannelId != null) {
-            ModMessages.sendToServer(new RemoveSubchannelFluidPacket(currentChannel.id(), selectedFluidSubchannelId, id));
+            net.minecraft.core.BlockPos owner = fluidSubchannelOwner(selectedFluidSubchannelId);
+            if (owner != null) {
+                ModMessages.sendToServer(new RemoveSubchannelFluidPacket(owner, selectedFluidSubchannelId, id));
+            }
         }
     }
 
@@ -3110,8 +3432,10 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (currentChannel == null || editingFluidVoid || selectedFluidSubchannelId == null) return;
         FluidFilter cur = resolveCurrentFluidFilter();
         if (cur == null) return;
+        net.minecraft.core.BlockPos owner = fluidSubchannelOwner(selectedFluidSubchannelId);
+        if (owner == null) return;
         ModMessages.sendToServer(new SetFluidSubchannelFilterModePacket(
-                currentChannel.id(), selectedFluidSubchannelId, !cur.isWhitelist()));
+                owner, selectedFluidSubchannelId, !cur.isWhitelist()));
     }
 
     public int getFluidsSlotCount() { return ITEMS_SLOTS_VISIBLE; }
@@ -3166,15 +3490,22 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         addRenderableWidget(fluidsNewSubInput);
         addRenderableWidget(PhotonButton.of(cx + rw - 40, topPos + CONTENT_TOP + 4, 40, 18,
                 Component.translatable("gui.quantumchanneling.items.new_sub_btn"),
-                b -> {
-                    if (currentChannel == null) return;
-                    String name = fluidsNewSubInput != null ? fluidsNewSubInput.getValue().trim() : "";
-                    if (name.isEmpty()) name = "Sub " + (currentChannel.fluidConfig().subchannelCount() + 1);
-                    ModMessages.sendToServer(new CreateFluidSubchannelPacket(currentChannel.id(), name));
-                    if (fluidsNewSubInput != null) fluidsNewSubInput.setValue("");
-                }, this::accentColor));
+                b -> sendCreateFluidSubchannel(),
+                this::accentColor));
 
-        int subCount = currentChannel == null ? 0 : currentChannel.fluidConfig().subchannelCount();
+        if (here != null && (here.type() == ChannelInfo.TYPE_EMITTER || here.type() == ChannelInfo.TYPE_RECEIVER)) {
+            com.quantumchanneling.channel.DispatchStrategy curS = here.fluidDispatch();
+            com.quantumchanneling.channel.DispatchStrategy nextS = curS.next();
+            addRenderableWidget(PhotonButton.of(cx, topPos + CONTENT_TOP + 50, 160, 18,
+                    Component.translatable("gui.quantumchanneling.dispatch.label",
+                            Component.translatable(curS.labelKey())),
+                    b -> ModMessages.sendToServer(
+                            new com.quantumchanneling.channel.SetDispatchStrategyPacket(
+                                    menu.getBlockPos(), (byte) 1, (byte) nextS.ordinal())),
+                    this::accentColor));
+        }
+
+        int subCount = currentChannel == null ? 0 : visibleFluidSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         if (cycleSize == 0) return;
         boolean showArrows = cycleSize > 1;
@@ -3202,7 +3533,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                     b -> sendToggleFluidFilterMode(), this::accentColor));
         }
 
-        if (selectedFluidSubchannelId != null && !editingFluidVoid && here != null) {
+        if (!emitter && selectedFluidSubchannelId != null && !editingFluidVoid && here != null) {
             boolean subbed = here.subscribedFluidSubchannels().contains(selectedFluidSubchannelId);
             java.util.UUID subId = selectedFluidSubchannelId;
             addRenderableWidget(PhotonButton.of(cx + 240, selY, 60, 18,
@@ -3215,11 +3546,14 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
         if (selectedFluidSubchannelId != null && !editingFluidVoid && currentChannel != null) {
             java.util.UUID subId = selectedFluidSubchannelId;
-            addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
-                    Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
-                    b -> ModMessages.sendToServer(new DeleteFluidSubchannelPacket(currentChannel.id(), subId))));
+            net.minecraft.core.BlockPos owner = fluidSubchannelOwner(subId);
+            if (owner != null) {
+                addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
+                        Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
+                        b -> ModMessages.sendToServer(new DeleteFluidSubchannelPacket(owner, subId))));
+            }
             if (emitter && here != null) {
-                java.util.List<java.util.UUID> mySubs = here.subscribedFluidSubchannels();
+                java.util.List<java.util.UUID> mySubs = orderedIds(here.fluidSubchannels());
                 int myIdx = mySubs.indexOf(subId);
                 int total = mySubs.size();
                 if (myIdx >= 0 && total >= 2) {
@@ -3255,7 +3589,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
         ChannelInfo.MemberPos here = findThisDevice();
         boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
-        int subCount = currentChannel.fluidConfig().subchannelCount();
+        int subCount = visibleFluidSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         if (cycleSize == 0) {
             Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
@@ -3306,9 +3640,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             }
         }
 
-        // Priority header row for emitters with multiple subscriptions.
+        // Priority header row for emitters that own multiple fluid subchannels.
         if (emitter && here != null && !editingFluidVoid && selectedFluidSubchannelId != null) {
-            java.util.List<java.util.UUID> mySubs = here.subscribedFluidSubchannels();
+            java.util.List<java.util.UUID> mySubs = orderedIds(here.fluidSubchannels());
             int myIdx = mySubs.indexOf(selectedFluidSubchannelId);
             if (myIdx >= 0 && mySubs.size() >= 2) {
                 gfx.drawString(font, Component.translatable(
@@ -3318,7 +3652,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             }
         }
 
-        int n = currentChannel.fluidConfig().subchannelCount();
+        int n = visibleFluidSubchannels().size();
         gfx.drawString(font, Component.translatable("gui.quantumchanneling.fluids.sub_count", n),
                 cx, topPos + BG_H - 18, 0xFFB0B8C8, false);
     }
@@ -3391,7 +3725,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return null;
         }
         if (selectedGasSubchannelId == null) return null;
-        var sub = currentChannel.gasConfig().subchannel(selectedGasSubchannelId);
+        var sub = findVisibleGasSubchannel(selectedGasSubchannelId);
         return sub == null ? null : sub.filter();
     }
 
@@ -3400,14 +3734,14 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return Component.translatable("gui.quantumchanneling.items.no_subs");
         }
         if (editingGasVoid) return Component.translatable("gui.quantumchanneling.items.editing_void");
-        var sub = currentChannel.gasConfig().subchannel(selectedGasSubchannelId);
+        var sub = findVisibleGasSubchannel(selectedGasSubchannelId);
         String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
         return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
     }
 
     private @Nullable java.util.UUID firstGasSubchannelId() {
         if (currentChannel == null) return null;
-        var it = currentChannel.gasConfig().subchannels().iterator();
+        var it = visibleGasSubchannels().iterator();
         return it.hasNext() ? it.next().id() : null;
     }
 
@@ -3418,7 +3752,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return;
         }
         if (selectedGasSubchannelId != null
-                && currentChannel.gasConfig().subchannel(selectedGasSubchannelId) != null) return;
+                && findVisibleGasSubchannel(selectedGasSubchannelId) != null) return;
         java.util.UUID first = firstGasSubchannelId();
         if (first != null) { selectedGasSubchannelId = first; editingGasVoid = false; }
         else if (isCurrentEmitter()) { editingGasVoid = true; selectedGasSubchannelId = null; }
@@ -3430,7 +3764,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         boolean emitter = isCurrentEmitter();
         java.util.List<Object> cycle = new java.util.ArrayList<>();
         if (emitter) cycle.add("VOID");
-        for (var s : currentChannel.gasConfig().subchannels()) cycle.add(s.id());
+        for (var s : visibleGasSubchannels()) cycle.add(s.id());
         if (cycle.isEmpty()) return;
         int idx = -1;
         if (editingGasVoid) {
@@ -3457,8 +3791,11 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (editingGasVoid) {
             ModMessages.sendToServer(new com.quantumchanneling.channel.AddEmitterGasVoidPacket(menu.getBlockPos(), id));
         } else if (selectedGasSubchannelId != null) {
-            ModMessages.sendToServer(new com.quantumchanneling.channel.AddSubchannelGasPacket(
-                    currentChannel.id(), selectedGasSubchannelId, id));
+            net.minecraft.core.BlockPos owner = gasSubchannelOwner(selectedGasSubchannelId);
+            if (owner != null) {
+                ModMessages.sendToServer(new com.quantumchanneling.channel.AddSubchannelGasPacket(
+                        owner, selectedGasSubchannelId, id));
+            }
         }
     }
     private void sendRemoveGas(net.minecraft.resources.ResourceLocation id) {
@@ -3466,16 +3803,21 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (editingGasVoid) {
             ModMessages.sendToServer(new com.quantumchanneling.channel.RemoveEmitterGasVoidPacket(menu.getBlockPos(), id));
         } else if (selectedGasSubchannelId != null) {
-            ModMessages.sendToServer(new com.quantumchanneling.channel.RemoveSubchannelGasPacket(
-                    currentChannel.id(), selectedGasSubchannelId, id));
+            net.minecraft.core.BlockPos owner = gasSubchannelOwner(selectedGasSubchannelId);
+            if (owner != null) {
+                ModMessages.sendToServer(new com.quantumchanneling.channel.RemoveSubchannelGasPacket(
+                        owner, selectedGasSubchannelId, id));
+            }
         }
     }
     private void sendToggleGasFilterMode() {
         if (currentChannel == null || editingGasVoid || selectedGasSubchannelId == null) return;
         var cur = resolveCurrentGasFilter();
         if (cur == null) return;
+        net.minecraft.core.BlockPos owner = gasSubchannelOwner(selectedGasSubchannelId);
+        if (owner == null) return;
         ModMessages.sendToServer(new com.quantumchanneling.channel.SetGasSubchannelFilterModePacket(
-                currentChannel.id(), selectedGasSubchannelId, !cur.isWhitelist()));
+                owner, selectedGasSubchannelId, !cur.isWhitelist()));
     }
 
     public int getGasesSlotCount() { return ITEMS_SLOTS_VISIBLE; }
@@ -3544,15 +3886,22 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         addRenderableWidget(gasesNewSubInput);
         addRenderableWidget(PhotonButton.of(cx + rw - 40, topPos + CONTENT_TOP + 4, 40, 18,
                 Component.translatable("gui.quantumchanneling.items.new_sub_btn"),
-                b -> {
-                    if (currentChannel == null) return;
-                    String name = gasesNewSubInput != null ? gasesNewSubInput.getValue().trim() : "";
-                    if (name.isEmpty()) name = "Sub " + (currentChannel.gasConfig().subchannelCount() + 1);
-                    ModMessages.sendToServer(new com.quantumchanneling.channel.CreateGasSubchannelPacket(currentChannel.id(), name));
-                    if (gasesNewSubInput != null) gasesNewSubInput.setValue("");
-                }, this::accentColor));
+                b -> sendCreateGasSubchannel(),
+                this::accentColor));
 
-        int subCount = currentChannel.gasConfig().subchannelCount();
+        if (here != null && (here.type() == ChannelInfo.TYPE_EMITTER || here.type() == ChannelInfo.TYPE_RECEIVER)) {
+            com.quantumchanneling.channel.DispatchStrategy curS = here.gasDispatch();
+            com.quantumchanneling.channel.DispatchStrategy nextS = curS.next();
+            addRenderableWidget(PhotonButton.of(cx, topPos + CONTENT_TOP + 50, 160, 18,
+                    Component.translatable("gui.quantumchanneling.dispatch.label",
+                            Component.translatable(curS.labelKey())),
+                    b -> ModMessages.sendToServer(
+                            new com.quantumchanneling.channel.SetDispatchStrategyPacket(
+                                    menu.getBlockPos(), (byte) 2, (byte) nextS.ordinal())),
+                    this::accentColor));
+        }
+
+        int subCount = visibleGasSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         if (cycleSize == 0) return;
         boolean showArrows = cycleSize > 1;
@@ -3580,7 +3929,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                     b -> sendToggleGasFilterMode(), this::accentColor));
         }
 
-        if (selectedGasSubchannelId != null && !editingGasVoid && here != null) {
+        if (!emitter && selectedGasSubchannelId != null && !editingGasVoid && here != null) {
             boolean subbed = here.subscribedGasSubchannels().contains(selectedGasSubchannelId);
             java.util.UUID subId = selectedGasSubchannelId;
             addRenderableWidget(PhotonButton.of(cx + 240, selY, 60, 18,
@@ -3593,11 +3942,14 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
         if (selectedGasSubchannelId != null && !editingGasVoid && currentChannel != null) {
             java.util.UUID subId = selectedGasSubchannelId;
-            addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
-                    Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
-                    b -> ModMessages.sendToServer(new com.quantumchanneling.channel.DeleteGasSubchannelPacket(currentChannel.id(), subId))));
+            net.minecraft.core.BlockPos owner = gasSubchannelOwner(subId);
+            if (owner != null) {
+                addRenderableWidget(PhotonButton.danger(cx + rw - 40, topPos + CONTENT_TOP + 160, 40, 18,
+                        Component.translatable("gui.quantumchanneling.items.delete_sub_btn"),
+                        b -> ModMessages.sendToServer(new com.quantumchanneling.channel.DeleteGasSubchannelPacket(owner, subId))));
+            }
             if (emitter && here != null) {
-                java.util.List<java.util.UUID> mySubs = here.subscribedGasSubchannels();
+                java.util.List<java.util.UUID> mySubs = orderedIds(here.gasSubchannels());
                 int myIdx = mySubs.indexOf(subId);
                 int total = mySubs.size();
                 if (myIdx >= 0 && total >= 2) {
@@ -3639,7 +3991,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
         ChannelInfo.MemberPos here = findThisDevice();
         boolean emitter = here != null && here.type() == ChannelInfo.TYPE_EMITTER;
-        int subCount = currentChannel.gasConfig().subchannelCount();
+        int subCount = visibleGasSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         if (cycleSize == 0) {
             Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
@@ -3686,7 +4038,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             }
         }
 
-        int n = currentChannel.gasConfig().subchannelCount();
+        int n = visibleGasSubchannels().size();
         gfx.drawString(font, Component.translatable("gui.quantumchanneling.gas.sub_count", n),
                 cx, topPos + BG_H - 18, 0xFFB0B8C8, false);
     }

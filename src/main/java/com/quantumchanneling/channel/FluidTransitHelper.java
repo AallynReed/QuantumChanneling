@@ -19,7 +19,6 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -51,14 +50,11 @@ public final class FluidTransitHelper {
                                     FluidStack stack) {
         if (stack == null || stack.isEmpty()) return Decision.REJECT;
         if (!emitter.fluidVoidFilter().matches(stack)) return Decision.VOID;
-        Set<UUID> subs = emitter.getSubscribedFluidSubchannels();
-        if (subs.isEmpty()) return Decision.REJECT;
-        for (UUID subId : subs) {
-            FluidSubchannel sub = channel.fluidConfig().subchannel(subId);
-            if (sub == null) continue;
+        if (emitter.fluidSubchannelCount() == 0) return Decision.REJECT;
+        for (FluidSubchannel sub : emitter.fluidSubchannels()) {
             if (!sub.filter().matches(stack)) continue;
-            if (server != null && !hasLoadedReceiverFor(server, channel, subId)) continue;
-            return Decision.route(subId);
+            if (server != null && !hasLoadedReceiverFor(server, channel, sub.id())) continue;
+            return Decision.route(sub.id());
         }
         return Decision.REJECT;
     }
@@ -103,14 +99,25 @@ public final class FluidTransitHelper {
         return switch (d.kind) {
             case VOID -> FluidStack.EMPTY;
             case REJECT -> stack;
-            case ROUTE -> pushToReceivers(level.getServer(), channel, d.subchannelId, stack, action);
+            case ROUTE -> pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, action);
         };
     }
 
-    private static FluidStack pushToReceivers(MinecraftServer server, QuantumChannel channel,
+    private static FluidStack pushToReceivers(MinecraftServer server,
+                                              PhotonEmitterBlockEntity emitter,
+                                              QuantumChannel channel,
                                               UUID subchannelId, FluidStack stack, IFluidHandler.FluidAction action) {
         List<PhotonReceiverBlockEntity> targets = loadedReceiversFor(server, channel, subchannelId);
         if (targets.isEmpty()) return stack;
+        if (emitter.getFluidDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
+                && targets.size() > 1) {
+            int start = action.execute()
+                    ? emitter.takeFluidRoundRobinIndex(targets.size())
+                    : Math.floorMod(emitter.takeFluidRoundRobinIndex(targets.size()) - 1, targets.size());
+            List<PhotonReceiverBlockEntity> rotated = new ArrayList<>(targets.size());
+            for (int i = 0; i < targets.size(); i++) rotated.add(targets.get((start + i) % targets.size()));
+            targets = rotated;
+        }
         FluidStack remaining = stack.copy();
         for (PhotonReceiverBlockEntity rcv : targets) {
             if (remaining.isEmpty()) break;
@@ -123,9 +130,15 @@ public final class FluidTransitHelper {
         if (stack.isEmpty()) return stack;
         var level = origin.getLevel();
         if (level == null) return stack;
+        Direction[] sides = Direction.values();
+        int startIdx = (origin.getFluidDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
+                && action.execute())
+                ? origin.takeFluidRoundRobinIndex(sides.length)
+                : 0;
         FluidStack remaining = stack.copy();
-        for (Direction side : Direction.values()) {
+        for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
+            Direction side = sides[(startIdx + i) % sides.length];
             BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
             if (neighbor == null) continue;
             IFluidHandler dest = neighbor.getCapability(ForgeCapabilities.FLUID_HANDLER, side.getOpposite()).orElse(null);
@@ -172,12 +185,12 @@ public final class FluidTransitHelper {
                     return taken.getAmount();
                 }
                 case ROUTE -> {
-                    FluidStack simulated = pushToReceivers(level.getServer(), channel, d.subchannelId, peek, IFluidHandler.FluidAction.SIMULATE);
+                    FluidStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, IFluidHandler.FluidAction.SIMULATE);
                     int wouldMove = peek.getAmount() - simulated.getAmount();
                     if (wouldMove <= 0) continue;
                     FluidStack taken = src.drain(new FluidStack(peek, wouldMove), IFluidHandler.FluidAction.EXECUTE);
                     if (taken.isEmpty()) continue;
-                    FluidStack leftover = pushToReceivers(level.getServer(), channel, d.subchannelId, taken, IFluidHandler.FluidAction.EXECUTE);
+                    FluidStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, IFluidHandler.FluidAction.EXECUTE);
                     // Drained-but-not-deposited would be a bug, but log-free path: just lose it.
                     return taken.getAmount() - leftover.getAmount();
                 }

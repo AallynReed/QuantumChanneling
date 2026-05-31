@@ -1,29 +1,33 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.network.NetworkEvent;
 
 import java.util.UUID;
 import java.util.function.Supplier;
 
-/** Client → server: toggle whitelist/blacklist on one subchannel's filter. */
-public record SetSubchannelFilterModePacket(UUID channelId, UUID subId, boolean whitelist) {
+/** Client → server: flip whitelist/blacklist on an item subchannel owned by {@code emitterPos}. */
+public record SetSubchannelFilterModePacket(BlockPos emitterPos, UUID subId, boolean whitelist) {
     public static void encode(SetSubchannelFilterModePacket p, FriendlyByteBuf b) {
-        b.writeUUID(p.channelId);
+        b.writeBlockPos(p.emitterPos);
         b.writeUUID(p.subId);
         b.writeBoolean(p.whitelist);
     }
     public static SetSubchannelFilterModePacket decode(FriendlyByteBuf b) {
-        return new SetSubchannelFilterModePacket(b.readUUID(), b.readUUID(), b.readBoolean());
+        return new SetSubchannelFilterModePacket(b.readBlockPos(), b.readUUID(), b.readBoolean());
     }
     public static void handle(SetSubchannelFilterModePacket p, Supplier<NetworkEvent.Context> sup) {
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
-            if (player == null) return;
-            ChannelData data = ChannelData.get(player.serverLevel().getServer());
-            if (data.setSubchannelFilterMode(p.channelId, player.getUUID(), p.subId, p.whitelist)) {
+            if (player == null || !PacketUtil.withinReach(player, p.emitterPos)) return;
+            BlockEntity be = player.level().getBlockEntity(p.emitterPos);
+            if (!(be instanceof PhotonEmitterBlockEntity em)) return;
+            if (em.setItemSubchannelFilterMode(p.subId, p.whitelist)) {
                 CreateChannelPacket.sendListBackTo(player);
             }
         });

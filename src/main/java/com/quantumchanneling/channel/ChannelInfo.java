@@ -141,22 +141,30 @@ public record ChannelInfo(
             String dim, long packedPos,
             byte type, int priority, boolean surge, boolean chunkLoaded, int cap, int lastTickRate,
             String customName,
-            /** Subchannels this device subscribes to (ordered: emitter priority, receiver display). */
+            /** Subchannel UUIDs this RECEIVER subscribes to. Empty for non-receivers. */
             List<UUID> subscribedSubchannels,
             /** Per-emitter void filter. Always serialized; only meaningful for emitters. */
             ItemFilter voidFilter,
-            /** Same shape as subscribedSubchannels, but for fluids. */
+            /** Receiver-only fluid subscription set. */
             List<UUID> subscribedFluidSubchannels,
-            /** Per-emitter fluid void filter. Always serialized; only meaningful for emitters. */
+            /** Per-emitter fluid void filter. Only meaningful for emitters. */
             FluidFilter fluidVoidFilter,
-            /** Gas subchannel subscriptions. */
+            /** Receiver-only gas subscription set. */
             List<UUID> subscribedGasSubchannels,
             /** Per-emitter gas void filter. Only meaningful for emitters. */
             GasFilter gasVoidFilter,
             /** Per-device resource participation. False = device opts out of that resource. */
             boolean itemsEnabled,
             boolean fluidsEnabled,
-            boolean gasEnabled
+            boolean gasEnabled,
+            /** Subchannels HOSTED by this emitter, in routing-priority order. Empty for non-emitters. */
+            List<ItemSubchannel> itemSubchannels,
+            List<FluidSubchannel> fluidSubchannels,
+            List<GasSubchannel> gasSubchannels,
+            /** Per-device dispatch strategies — apply to receivers (emitter) or adjacent invs (receiver). */
+            DispatchStrategy itemDispatch,
+            DispatchStrategy fluidDispatch,
+            DispatchStrategy gasDispatch
     ) {
         public void write(FriendlyByteBuf b) {
             b.writeUtf(dim, 80);
@@ -180,6 +188,15 @@ public record ChannelInfo(
             b.writeBoolean(itemsEnabled);
             b.writeBoolean(fluidsEnabled);
             b.writeBoolean(gasEnabled);
+            b.writeVarInt(itemSubchannels.size());
+            for (ItemSubchannel s : itemSubchannels) s.write(b);
+            b.writeVarInt(fluidSubchannels.size());
+            for (FluidSubchannel s : fluidSubchannels) s.write(b);
+            b.writeVarInt(gasSubchannels.size());
+            for (GasSubchannel s : gasSubchannels) s.write(b);
+            b.writeByte(itemDispatch.ordinal());
+            b.writeByte(fluidDispatch.ordinal());
+            b.writeByte(gasDispatch.ordinal());
         }
         public static MemberPos read(FriendlyByteBuf b) {
             String dim = b.readUtf(80);
@@ -206,7 +223,21 @@ public record ChannelInfo(
             boolean itEn = b.readBoolean();
             boolean flEn = b.readBoolean();
             boolean gaEn = b.readBoolean();
-            return new MemberPos(dim, pos, type, pri, surge, cl, cap, rate, name, subs, voidF, fluidSubs, fluidVoidF, gasSubs, gasVoidF, itEn, flEn, gaEn);
+            int isn = b.readVarInt();
+            List<ItemSubchannel> itemSubs = new ArrayList<>(isn);
+            for (int i = 0; i < isn; i++) itemSubs.add(ItemSubchannel.read(b));
+            int fsn = b.readVarInt();
+            List<FluidSubchannel> fluidSubchans = new ArrayList<>(fsn);
+            for (int i = 0; i < fsn; i++) fluidSubchans.add(FluidSubchannel.read(b));
+            int gsn = b.readVarInt();
+            List<GasSubchannel> gasSubchans = new ArrayList<>(gsn);
+            for (int i = 0; i < gsn; i++) gasSubchans.add(GasSubchannel.read(b));
+            DispatchStrategy itemD  = DispatchStrategy.byOrdinal(b.readByte());
+            DispatchStrategy fluidD = DispatchStrategy.byOrdinal(b.readByte());
+            DispatchStrategy gasD   = DispatchStrategy.byOrdinal(b.readByte());
+            return new MemberPos(dim, pos, type, pri, surge, cl, cap, rate, name, subs, voidF,
+                    fluidSubs, fluidVoidF, gasSubs, gasVoidF, itEn, flEn, gaEn,
+                    itemSubs, fluidSubchans, gasSubchans, itemD, fluidD, gasD);
         }
         public BlockPos pos() { return BlockPos.of(packedPos); }
         public String typeName() {
@@ -336,7 +367,13 @@ public record ChannelInfo(
             FluidFilter fluidVoidFilterCopy = new FluidFilter(false);
             List<UUID> gasSubs = new ArrayList<>();
             GasFilter gasVoidFilterCopy = new GasFilter(false);
-            boolean itEn = true, flEn = true, gaEn = true;
+            boolean itEn = false, flEn = false, gaEn = false;
+            List<ItemSubchannel> itemHosted = new ArrayList<>();
+            List<FluidSubchannel> fluidHosted = new ArrayList<>();
+            List<GasSubchannel> gasHosted = new ArrayList<>();
+            DispatchStrategy itemD = DispatchStrategy.SERVE_FIRST;
+            DispatchStrategy fluidD = DispatchStrategy.SERVE_FIRST;
+            DispatchStrategy gasD = DispatchStrategy.SERVE_FIRST;
             ServerLevel level = server.getLevel(gp.dimension());
             if (level != null && level.isLoaded(gp.pos())) {
                 BlockEntity be = level.getBlockEntity(gp.pos());
@@ -352,12 +389,18 @@ public record ChannelInfo(
                     itEn = bound.isItemsEnabled();
                     flEn = bound.isFluidsEnabled();
                     gaEn = bound.isGasEnabled();
+                    itemD  = bound.getItemDispatch();
+                    fluidD = bound.getFluidDispatch();
+                    gasD   = bound.getGasDispatch();
                 }
                 if (be instanceof PhotonEmitterBlockEntity em) {
                     type = TYPE_EMITTER; emitterCount++; rate = em.getLastTickThroughput(); totalIn += rate;
                     voidFilterCopy.copyFrom(em.voidFilter());
                     fluidVoidFilterCopy.copyFrom(em.fluidVoidFilter());
                     gasVoidFilterCopy.copyFrom(em.gasVoidFilter());
+                    itemHosted.addAll(em.itemSubchannels());
+                    fluidHosted.addAll(em.fluidSubchannels());
+                    gasHosted.addAll(em.gasSubchannels());
                 } else if (be instanceof PhotonReceiverBlockEntity rc) {
                     type = TYPE_RECEIVER; receiverCount++; rate = rc.getLastTickThroughput(); totalOut += rate;
                 } else if (be instanceof PhotonStorageBlockEntity st) {
@@ -369,7 +412,7 @@ public record ChannelInfo(
             }
             ms.add(new MemberPos(dim, packed, type, priority, surge, chunkLoaded, cap, rate,
                     customName, subs, voidFilterCopy, fluidSubs, fluidVoidFilterCopy, gasSubs, gasVoidFilterCopy,
-                    itEn, flEn, gaEn));
+                    itEn, flEn, gaEn, itemHosted, fluidHosted, gasHosted, itemD, fluidD, gasD));
         }
         boolean canManage = net.canManage(viewerId);
         boolean canUse = net.canUse(viewerId);

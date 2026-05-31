@@ -23,7 +23,6 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -51,14 +50,11 @@ public final class GasIntegration {
         ResourceLocation gasId = MekanismAPI.gasRegistry().getKey(stack.getType());
         if (gasId == null) return Decision.REJECT;
         if (!emitter.gasVoidFilter().matchesId(gasId)) return Decision.VOID;
-        Set<UUID> subs = emitter.getSubscribedGasSubchannels();
-        if (subs.isEmpty()) return Decision.REJECT;
-        for (UUID subId : subs) {
-            GasSubchannel sub = channel.gasConfig().subchannel(subId);
-            if (sub == null) continue;
+        if (emitter.gasSubchannelCount() == 0) return Decision.REJECT;
+        for (GasSubchannel sub : emitter.gasSubchannels()) {
             if (!sub.filter().matchesId(gasId)) continue;
-            if (server != null && !hasLoadedReceiverFor(server, channel, subId)) continue;
-            return Decision.route(subId);
+            if (server != null && !hasLoadedReceiverFor(server, channel, sub.id())) continue;
+            return Decision.route(sub.id());
         }
         return Decision.REJECT;
     }
@@ -75,6 +71,7 @@ public final class GasIntegration {
             @Override
             public @NotNull GasStack insertChemical(int tank, @NotNull GasStack stack, @NotNull Action action) {
                 if (stack == null || stack.isEmpty()) return stack;
+                if (!com.quantumchanneling.ServerConfig.gasesRoutingEnabled) return stack;
                 if (!(emitter.getLevel() instanceof ServerLevel sl)) return stack;
                 UUID id = emitter.getChannelId();
                 if (id == null) return stack;
@@ -105,7 +102,7 @@ public final class GasIntegration {
         return switch (d.kind) {
             case VOID -> GasStack.EMPTY;
             case REJECT -> stack;
-            case ROUTE -> pushToReceivers(server, channel, d.subchannelId, stack, action);
+            case ROUTE -> pushToReceivers(server, emitter, channel, d.subchannelId, stack, action);
         };
     }
 
@@ -141,10 +138,21 @@ public final class GasIntegration {
         return out;
     }
 
-    private static GasStack pushToReceivers(MinecraftServer server, QuantumChannel channel,
+    private static GasStack pushToReceivers(MinecraftServer server,
+                                            PhotonEmitterBlockEntity emitter,
+                                            QuantumChannel channel,
                                             UUID subchannelId, GasStack stack, Action action) {
         List<PhotonReceiverBlockEntity> targets = loadedReceiversFor(server, channel, subchannelId);
         if (targets.isEmpty()) return stack;
+        if (emitter.getGasDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
+                && targets.size() > 1) {
+            int start = (action == Action.EXECUTE)
+                    ? emitter.takeGasRoundRobinIndex(targets.size())
+                    : Math.floorMod(emitter.takeGasRoundRobinIndex(targets.size()) - 1, targets.size());
+            List<PhotonReceiverBlockEntity> rotated = new ArrayList<>(targets.size());
+            for (int i = 0; i < targets.size(); i++) rotated.add(targets.get((start + i) % targets.size()));
+            targets = rotated;
+        }
         GasStack remaining = stack.copy();
         for (PhotonReceiverBlockEntity rcv : targets) {
             if (remaining.isEmpty()) break;
@@ -157,9 +165,15 @@ public final class GasIntegration {
         if (stack.isEmpty()) return stack;
         var level = origin.getLevel();
         if (level == null) return stack;
+        Direction[] sides = Direction.values();
+        int startIdx = (origin.getGasDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
+                && action == Action.EXECUTE)
+                ? origin.takeGasRoundRobinIndex(sides.length)
+                : 0;
         GasStack remaining = stack.copy();
-        for (Direction side : Direction.values()) {
+        for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
+            Direction side = sides[(startIdx + i) % sides.length];
             BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
             if (neighbor == null) continue;
             IGasHandler dest = neighbor.getCapability(MekanismCaps.GAS, side.getOpposite()).orElse(null);
@@ -193,12 +207,12 @@ public final class GasIntegration {
                         return;
                     }
                     case ROUTE -> {
-                        GasStack simulated = pushToReceivers(level.getServer(), channel, d.subchannelId, peek, Action.SIMULATE);
+                        GasStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, Action.SIMULATE);
                         long wouldMove = peek.getAmount() - simulated.getAmount();
                         if (wouldMove <= 0) continue;
                         GasStack taken = src.extractChemical(tank, wouldMove, Action.EXECUTE);
                         if (taken.isEmpty()) continue;
-                        pushToReceivers(level.getServer(), channel, d.subchannelId, taken, Action.EXECUTE);
+                        pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, Action.EXECUTE);
                         return;
                     }
                 }

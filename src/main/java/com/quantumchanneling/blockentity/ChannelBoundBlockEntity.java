@@ -2,6 +2,7 @@ package com.quantumchanneling.blockentity;
 
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.channel.ChannelData;
+import com.quantumchanneling.channel.DispatchStrategy;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
 import net.minecraft.nbt.CompoundTag;
@@ -54,13 +55,26 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
     private final LinkedHashSet<java.util.UUID> subscribedGasSubchannels = new LinkedHashSet<>();
 
     /**
-     * Per-device participation flags. When false, this device doesn't pull/push/accept the named
-     * resource even if it's bound to a channel where other devices are routing it. Default true so
-     * a fresh device just works — users opt out per side, not opt in.
+     * Per-device participation flags. False = device doesn't pull/push/accept the named resource.
+     * Default off so a fresh device routes nothing until the user opts in per resource — keeps
+     * inventories from being silently drained by a freshly placed emitter.
      */
-    private boolean itemsEnabled = true;
-    private boolean fluidsEnabled = true;
-    private boolean gasEnabled = true;
+    private boolean itemsEnabled = false;
+    private boolean fluidsEnabled = false;
+    private boolean gasEnabled = false;
+
+    /**
+     * Dispatch strategies — one per resource — for distributing across downstream targets. On an
+     * emitter this picks among subscribed receivers; on a receiver it picks among adjacent
+     * inventories / tanks. Round-robin uses the cursor counters below to remember where it left off.
+     */
+    private DispatchStrategy itemDispatch  = DispatchStrategy.SERVE_FIRST;
+    private DispatchStrategy fluidDispatch = DispatchStrategy.SERVE_FIRST;
+    private DispatchStrategy gasDispatch   = DispatchStrategy.SERVE_FIRST;
+    private int itemRoundRobinCursor  = 0;
+    private int fluidRoundRobinCursor = 0;
+    private int gasRoundRobinCursor   = 0;
+
     /** Bumped by subclasses whenever a local-only setting changes that an emitter's mask must see. */
     private int localEditCount = 0;
 
@@ -144,6 +158,12 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
 
     public boolean addSubscribedSubchannel(java.util.UUID subId) {
         if (subId == null) return false;
+        // Per-receiver cap. Already-subscribed UUIDs aren't counted twice (re-adding a known sub is
+        // a no-op anyway and returns false at the set.add below).
+        if (!subscribedSubchannels.contains(subId)
+                && subscribedSubchannels.size() >= com.quantumchanneling.ServerConfig.itemsMaxSubsPerReceiver) {
+            return false;
+        }
         if (!subscribedSubchannels.add(subId)) return false;
         bumpLocalEdit();
         return true;
@@ -183,6 +203,10 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
 
     public boolean addSubscribedFluidSubchannel(java.util.UUID subId) {
         if (subId == null) return false;
+        if (!subscribedFluidSubchannels.contains(subId)
+                && subscribedFluidSubchannels.size() >= com.quantumchanneling.ServerConfig.fluidsMaxSubsPerReceiver) {
+            return false;
+        }
         if (!subscribedFluidSubchannels.add(subId)) return false;
         bumpLocalEdit();
         return true;
@@ -204,6 +228,10 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
     }
     public boolean addSubscribedGasSubchannel(java.util.UUID subId) {
         if (subId == null) return false;
+        if (!subscribedGasSubchannels.contains(subId)
+                && subscribedGasSubchannels.size() >= com.quantumchanneling.ServerConfig.gasesMaxSubsPerReceiver) {
+            return false;
+        }
         if (!subscribedGasSubchannels.add(subId)) return false;
         bumpLocalEdit();
         return true;
@@ -254,6 +282,47 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
     public void setItemsEnabled(boolean v)  { if (v != itemsEnabled)  { itemsEnabled  = v; bumpLocalEdit(); } }
     public void setFluidsEnabled(boolean v) { if (v != fluidsEnabled) { fluidsEnabled = v; bumpLocalEdit(); } }
     public void setGasEnabled(boolean v)    { if (v != gasEnabled)    { gasEnabled    = v; bumpLocalEdit(); } }
+
+    /* ---- dispatch strategy ---- */
+    public DispatchStrategy getItemDispatch()  { return itemDispatch; }
+    public DispatchStrategy getFluidDispatch() { return fluidDispatch; }
+    public DispatchStrategy getGasDispatch()   { return gasDispatch; }
+
+    public void setItemDispatch(DispatchStrategy s) {
+        if (s == null || s == itemDispatch) return;
+        itemDispatch = s; itemRoundRobinCursor = 0; bumpLocalEdit();
+    }
+    public void setFluidDispatch(DispatchStrategy s) {
+        if (s == null || s == fluidDispatch) return;
+        fluidDispatch = s; fluidRoundRobinCursor = 0; bumpLocalEdit();
+    }
+    public void setGasDispatch(DispatchStrategy s) {
+        if (s == null || s == gasDispatch) return;
+        gasDispatch = s; gasRoundRobinCursor = 0; bumpLocalEdit();
+    }
+
+    /** Round-robin position for a target count of {@code size}, then advance the cursor. */
+    public int takeItemRoundRobinIndex(int size) {
+        if (size <= 0) return 0;
+        int i = Math.floorMod(itemRoundRobinCursor, size);
+        itemRoundRobinCursor = (itemRoundRobinCursor + 1) & 0x7FFFFFFF;
+        setChanged();
+        return i;
+    }
+    public int takeFluidRoundRobinIndex(int size) {
+        if (size <= 0) return 0;
+        int i = Math.floorMod(fluidRoundRobinCursor, size);
+        fluidRoundRobinCursor = (fluidRoundRobinCursor + 1) & 0x7FFFFFFF;
+        setChanged();
+        return i;
+    }
+    public int takeGasRoundRobinIndex(int size) {
+        if (size <= 0) return 0;
+        int i = Math.floorMod(gasRoundRobinCursor, size);
+        gasRoundRobinCursor = (gasRoundRobinCursor + 1) & 0x7FFFFFFF;
+        setChanged();
+        return i;
+    }
 
     /**
      * Resolves the actual per-tick FE budget. Surge overrides the per-device cap entirely. Otherwise:
@@ -333,10 +402,14 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         if (!subscribedGasSubchannels.isEmpty()) {
             tag.put("SubscribedGasSubs", saveUuidList(subscribedGasSubchannels));
         }
-        // Only persist disable bits — default-on means a missing tag reads as enabled, keeping NBT lean.
-        if (!itemsEnabled)  tag.putBoolean("ItemsDisabled",  true);
-        if (!fluidsEnabled) tag.putBoolean("FluidsDisabled", true);
-        if (!gasEnabled)    tag.putBoolean("GasDisabled",    true);
+        // Default-off — only the enable bits are persisted; a missing tag reads as off.
+        if (itemsEnabled)  tag.putBoolean("ItemsEnabled",  true);
+        if (fluidsEnabled) tag.putBoolean("FluidsEnabled", true);
+        if (gasEnabled)    tag.putBoolean("GasEnabled",    true);
+        // Only save non-default strategies; SERVE_FIRST(=0) maps to a missing tag.
+        if (itemDispatch  != DispatchStrategy.SERVE_FIRST) tag.putByte("ItemDispatch",  (byte) itemDispatch.ordinal());
+        if (fluidDispatch != DispatchStrategy.SERVE_FIRST) tag.putByte("FluidDispatch", (byte) fluidDispatch.ordinal());
+        if (gasDispatch   != DispatchStrategy.SERVE_FIRST) tag.putByte("GasDispatch",   (byte) gasDispatch.ordinal());
     }
 
     @Override
@@ -360,9 +433,12 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         if (tag.contains("SubscribedGasSubs", Tag.TAG_LIST)) {
             loadUuidList(tag.getList("SubscribedGasSubs", Tag.TAG_COMPOUND), subscribedGasSubchannels);
         }
-        itemsEnabled  = !tag.getBoolean("ItemsDisabled");
-        fluidsEnabled = !tag.getBoolean("FluidsDisabled");
-        gasEnabled    = !tag.getBoolean("GasDisabled");
+        itemsEnabled  = tag.getBoolean("ItemsEnabled");
+        fluidsEnabled = tag.getBoolean("FluidsEnabled");
+        gasEnabled    = tag.getBoolean("GasEnabled");
+        itemDispatch  = DispatchStrategy.byOrdinal(tag.getByte("ItemDispatch"));
+        fluidDispatch = DispatchStrategy.byOrdinal(tag.getByte("FluidDispatch"));
+        gasDispatch   = DispatchStrategy.byOrdinal(tag.getByte("GasDispatch"));
     }
 
     private static ListTag saveUuidList(LinkedHashSet<java.util.UUID> set) {

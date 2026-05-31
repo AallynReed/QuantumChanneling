@@ -187,9 +187,7 @@ public class ChannelData extends SavedData {
         return true;
     }
 
-    /* ---- item-mode config (all gated by canManage) ---- */
-
-    // setItemEnabled removed — per-device flag, see ChannelBoundBlockEntity.setItemsEnabled().
+    /* ---- channel-wide batch knobs ---- */
 
     public boolean setItemBatchSize(UUID channelId, @Nullable UUID actor, int batchSize) {
         QuantumChannel net = networks.get(channelId);
@@ -199,105 +197,6 @@ public class ChannelData extends SavedData {
         return true;
     }
 
-    /** Returns the new subchannel's id, or null on failure (cap reached / not authorized). */
-    public @Nullable UUID createSubchannel(UUID channelId, @Nullable UUID actor, String name) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return null;
-        UUID id = net.itemConfig().createSubchannel(name);
-        if (id != null) setDirty();
-        return id;
-    }
-
-    public boolean deleteSubchannel(UUID channelId, @Nullable UUID actor, UUID subId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.itemConfig().deleteSubchannel(subId);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    public boolean renameSubchannel(UUID channelId, @Nullable UUID actor, UUID subId, String name) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.itemConfig().renameSubchannel(subId, name);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    public boolean setSubchannelFilterMode(UUID channelId, @Nullable UUID actor, UUID subId, boolean whitelist) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.itemConfig().setSubchannelFilterMode(subId, whitelist);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    public boolean addSubchannelItem(UUID channelId, @Nullable UUID actor, UUID subId,
-                                     net.minecraft.resources.ResourceLocation itemId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.itemConfig().addSubchannelItem(subId, itemId);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    public boolean removeSubchannelItem(UUID channelId, @Nullable UUID actor, UUID subId,
-                                        net.minecraft.resources.ResourceLocation itemId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.itemConfig().removeSubchannelItem(subId, itemId);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    /* ---- fluid-mode config (parallel to items, same canManage gating) ---- */
-
-    // setFluidEnabled removed — per-device flag, see ChannelBoundBlockEntity.setFluidsEnabled().
-
-    public @Nullable UUID createFluidSubchannel(UUID channelId, @Nullable UUID actor, String name) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return null;
-        UUID id = net.fluidConfig().createSubchannel(name);
-        if (id != null) setDirty();
-        return id;
-    }
-
-    public boolean deleteFluidSubchannel(UUID channelId, @Nullable UUID actor, UUID subId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.fluidConfig().deleteSubchannel(subId);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    public boolean setFluidSubchannelFilterMode(UUID channelId, @Nullable UUID actor, UUID subId, boolean whitelist) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.fluidConfig().setSubchannelFilterMode(subId, whitelist);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    public boolean addSubchannelFluid(UUID channelId, @Nullable UUID actor, UUID subId,
-                                      net.minecraft.resources.ResourceLocation fluidId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.fluidConfig().addSubchannelFluid(subId, fluidId);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    public boolean removeSubchannelFluid(UUID channelId, @Nullable UUID actor, UUID subId,
-                                         net.minecraft.resources.ResourceLocation fluidId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.fluidConfig().removeSubchannelFluid(subId, fluidId);
-        if (ok) setDirty();
-        return ok;
-    }
-
-    // setGasEnabled removed — per-device flag, see ChannelBoundBlockEntity.setGasEnabled().
-
     public boolean setHeatEnabled(UUID channelId, @Nullable UUID actor, boolean enabled) {
         QuantumChannel net = networks.get(channelId);
         if (net == null || !net.canManage(actor)) return false;
@@ -306,44 +205,8 @@ public class ChannelData extends SavedData {
         return true;
     }
 
-    /* ---- gas subchannel mgmt ---- */
-    public @Nullable UUID createGasSubchannel(UUID channelId, @Nullable UUID actor, String name) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return null;
-        UUID id = net.gasConfig().createSubchannel(name);
-        if (id != null) setDirty();
-        return id;
-    }
-    public boolean deleteGasSubchannel(UUID channelId, @Nullable UUID actor, UUID subId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.gasConfig().deleteSubchannel(subId);
-        if (ok) setDirty();
-        return ok;
-    }
-    public boolean setGasSubchannelFilterMode(UUID channelId, @Nullable UUID actor, UUID subId, boolean whitelist) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.gasConfig().setSubchannelFilterMode(subId, whitelist);
-        if (ok) setDirty();
-        return ok;
-    }
-    public boolean addSubchannelGas(UUID channelId, @Nullable UUID actor, UUID subId,
-                                    net.minecraft.resources.ResourceLocation gasId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.gasConfig().addSubchannelGas(subId, gasId);
-        if (ok) setDirty();
-        return ok;
-    }
-    public boolean removeSubchannelGas(UUID channelId, @Nullable UUID actor, UUID subId,
-                                       net.minecraft.resources.ResourceLocation gasId) {
-        QuantumChannel net = networks.get(channelId);
-        if (net == null || !net.canManage(actor)) return false;
-        boolean ok = net.gasConfig().removeSubchannelGas(subId, gasId);
-        if (ok) setDirty();
-        return ok;
-    }
+    /* Subchannel CRUD lives on the emitter BE — see PhotonEmitterBlockEntity. The mutation
+       packets target the emitter's BlockPos directly and bypass this class. */
 
     /**
      * Only the current owner can transfer. The previous owner is demoted to ADMIN so they keep
@@ -452,6 +315,13 @@ public class ChannelData extends SavedData {
         lastTickPlayerSlotBreakdown.clear();
         lastTickPlayerSlotBreakdown.putAll(currentTickPlayerSlotBreakdown);
         currentTickPlayerSlotBreakdown.clear();
+
+        // Server-side master switch. The display still zeroes out via the snapshot above so the
+        // last-tick rate reads as 0 while disabled.
+        if (!com.quantumchanneling.ServerConfig.wirelessEnabled) return;
+
+        // Nobody subscribed → nothing to dispatch. Skips the rest of the per-tick allocations.
+        if (chargingSubscriptions.isEmpty()) return;
 
         // Group subscribed, online players by channel so we can split each channel's source pool
         // fairly across all online subscribers. Offline subscribers are naturally skipped (they
@@ -675,6 +545,9 @@ public class ChannelData extends SavedData {
         List<SlotIterEntry> out = new ArrayList<>();
         for (int g : groups) {
             if (!ChargingSlots.has(mask, g)) continue;
+            // Server config can disable individual slot groups. The per-channel mask still lets
+            // users toggle them in the UI, but the dispatcher skips disabled groups entirely.
+            if (!isSlotGroupAllowedByConfig(g)) continue;
             int main = net.slotPriority(g);
             switch (g) {
                 case ChargingSlots.HAND -> {
@@ -732,6 +605,17 @@ public class ChannelData extends SavedData {
             }
         }
         return out;
+    }
+
+    private static boolean isSlotGroupAllowedByConfig(int slotBit) {
+        return switch (slotBit) {
+            case ChargingSlots.HAND      -> com.quantumchanneling.ServerConfig.slotHandEnabled;
+            case ChargingSlots.HOTBAR    -> com.quantumchanneling.ServerConfig.slotHotbarEnabled;
+            case ChargingSlots.INVENTORY -> com.quantumchanneling.ServerConfig.slotInventoryEnabled;
+            case ChargingSlots.ARMOR     -> com.quantumchanneling.ServerConfig.slotArmorEnabled;
+            case ChargingSlots.CURIOS    -> com.quantumchanneling.ServerConfig.slotCuriosEnabled;
+            default -> true;
+        };
     }
 
     /** Walk this channel's loaded emitters and pull up to {@code want} FE total. */
