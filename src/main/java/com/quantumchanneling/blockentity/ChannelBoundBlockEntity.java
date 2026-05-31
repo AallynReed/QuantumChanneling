@@ -78,6 +78,35 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
     /** Bumped by subclasses whenever a local-only setting changes that an emitter's mask must see. */
     private int localEditCount = 0;
 
+    /**
+     * Per-resource side masks. Each is a 6-bit field where bit N (matching {@link Direction#get3DDataValue()})
+     * being set means side N is "armed" — the routing helpers may scan from / push to it. Defaults
+     * to all six sides on so behaviour is unchanged for fresh devices. Stored on the BE so both
+     * emitter (pull-side mask) and receiver (push-side mask) share the same plumbing.
+     */
+    private int itemSideMask  = 0x3F;
+    private int fluidSideMask = 0x3F;
+    private int gasSideMask   = 0x3F;
+
+    /**
+     * Redstone gating. {@link RedstoneMode#IGNORE} (default) is the historical behaviour. The other
+     * two consult the BE's neighbours and disable the device when the condition matches. Checked
+     * once per tick by subclasses' {@code serverTick} entry point.
+     */
+    private RedstoneMode redstoneMode = RedstoneMode.IGNORE;
+
+    /** Three-state redstone gate. Names match the screen labels. */
+    public enum RedstoneMode {
+        IGNORE,
+        OFF_WHEN_POWERED,
+        OFF_WHEN_UNPOWERED;
+
+        public static RedstoneMode byOrdinal(int o) {
+            RedstoneMode[] vs = values();
+            return (o >= 0 && o < vs.length) ? vs[o] : IGNORE;
+        }
+    }
+
     protected ChannelBoundBlockEntity(BlockEntityType<?> type, BlockPos pos, BlockState state) {
         super(type, pos, state);
     }
@@ -95,15 +124,25 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
                 com.quantumchanneling.channel.QuantumChannel oldCh = data.getChannel(old);
                 if (oldCh != null) onLeavingChannel(oldCh);
                 data.removeMember(old, here);
+                fireMembership(old, here, com.quantumchanneling.api.event.ChannelMembershipEvent.Kind.LEFT);
             }
             if (id != null) {
                 data.addMember(id, here);
                 com.quantumchanneling.channel.QuantumChannel newCh = data.getChannel(id);
                 if (newCh != null) onJoiningChannel(newCh);
+                fireMembership(id, here, com.quantumchanneling.api.event.ChannelMembershipEvent.Kind.JOINED);
             }
         }
         setChanged();
         return true;
+    }
+
+    private static void fireMembership(UUID channelId, GlobalPos pos,
+                                       com.quantumchanneling.api.event.ChannelMembershipEvent.Kind kind) {
+        try {
+            net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(
+                    new com.quantumchanneling.api.event.ChannelMembershipEvent(channelId, pos, kind));
+        } catch (Throwable ignored) {}
     }
 
     /** Subclasses override to clean up channel-side state (e.g. emitter reverse index entries). */
@@ -166,12 +205,14 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         }
         if (!subscribedSubchannels.add(subId)) return false;
         bumpLocalEdit();
+        bumpChannelItemsVersion();
         return true;
     }
 
     public boolean removeSubscribedSubchannel(java.util.UUID subId) {
         if (!subscribedSubchannels.remove(subId)) return false;
         bumpLocalEdit();
+        bumpChannelItemsVersion();
         return true;
     }
 
@@ -209,12 +250,14 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         }
         if (!subscribedFluidSubchannels.add(subId)) return false;
         bumpLocalEdit();
+        bumpChannelFluidsVersion();
         return true;
     }
 
     public boolean removeSubscribedFluidSubchannel(java.util.UUID subId) {
         if (!subscribedFluidSubchannels.remove(subId)) return false;
         bumpLocalEdit();
+        bumpChannelFluidsVersion();
         return true;
     }
 
@@ -234,11 +277,13 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         }
         if (!subscribedGasSubchannels.add(subId)) return false;
         bumpLocalEdit();
+        bumpChannelGasVersion();
         return true;
     }
     public boolean removeSubscribedGasSubchannel(java.util.UUID subId) {
         if (!subscribedGasSubchannels.remove(subId)) return false;
         bumpLocalEdit();
+        bumpChannelGasVersion();
         return true;
     }
     public boolean moveSubscribedGasSubchannel(java.util.UUID subId, int direction) {
@@ -275,13 +320,112 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
     public int getLocalEditCount() { return localEditCount; }
     public void bumpLocalEdit() { localEditCount++; setChanged(); }
 
+    /* ---- per-side enable masks ---- */
+    public int getItemSideMask()  { return itemSideMask  & 0x3F; }
+    public int getFluidSideMask() { return fluidSideMask & 0x3F; }
+    public int getGasSideMask()   { return gasSideMask   & 0x3F; }
+
+    public void setItemSideMask(int mask)  { setSideMask(0, mask); }
+    public void setFluidSideMask(int mask) { setSideMask(1, mask); }
+    public void setGasSideMask(int mask)   { setSideMask(2, mask); }
+
+    private void setSideMask(int kind, int mask) {
+        int v = mask & 0x3F;
+        switch (kind) {
+            case 0 -> { if (v == itemSideMask)  return; itemSideMask  = v; bumpChannelItemsVersion(); }
+            case 1 -> { if (v == fluidSideMask) return; fluidSideMask = v; bumpChannelFluidsVersion(); }
+            case 2 -> { if (v == gasSideMask)   return; gasSideMask   = v; bumpChannelGasVersion(); }
+            default -> { return; }
+        }
+        bumpLocalEdit();
+    }
+
+    /** True when bit for {@code dir.get3DDataValue()} is set in the items side mask. */
+    public boolean isItemSideArmed(net.minecraft.core.Direction dir) {
+        return (itemSideMask & (1 << dir.get3DDataValue())) != 0;
+    }
+    public boolean isFluidSideArmed(net.minecraft.core.Direction dir) {
+        return (fluidSideMask & (1 << dir.get3DDataValue())) != 0;
+    }
+    public boolean isGasSideArmed(net.minecraft.core.Direction dir) {
+        return (gasSideMask & (1 << dir.get3DDataValue())) != 0;
+    }
+
+    /* ---- redstone gate ---- */
+    public RedstoneMode getRedstoneMode() { return redstoneMode; }
+    public void setRedstoneMode(RedstoneMode m) {
+        if (m == null || m == redstoneMode) return;
+        redstoneMode = m;
+        bumpLocalEdit();
+        // Toggling this can flip the device on/off this tick, so wake the routing decision caches.
+        bumpChannelItemsVersion();
+        bumpChannelFluidsVersion();
+        bumpChannelGasVersion();
+    }
+
+    /**
+     * Checks the current redstone neighbour state against {@link #redstoneMode}. Returns true when
+     * the device is effectively on (mode is IGNORE, or the neighbour signal matches the rule). Cheap
+     * single-call per tick — vanilla's {@code hasNeighborSignal} walks the 6 sides internally.
+     */
+    public boolean passesRedstoneGate() {
+        if (redstoneMode == RedstoneMode.IGNORE || level == null) return true;
+        boolean powered = level.hasNeighborSignal(worldPosition);
+        return switch (redstoneMode) {
+            case OFF_WHEN_POWERED   -> !powered;
+            case OFF_WHEN_UNPOWERED -> powered;
+            default -> true;
+        };
+    }
+
+    /** Subclasses use this in their cap handlers + tick paths so redstone gates the whole device. */
+    public boolean isResourceGate(boolean enabledFlag) {
+        return enabledFlag && passesRedstoneGate();
+    }
+
     /* ---- per-device resource enable flags ---- */
     public boolean isItemsEnabled()  { return itemsEnabled; }
     public boolean isFluidsEnabled() { return fluidsEnabled; }
     public boolean isGasEnabled()    { return gasEnabled; }
-    public void setItemsEnabled(boolean v)  { if (v != itemsEnabled)  { itemsEnabled  = v; bumpLocalEdit(); } }
-    public void setFluidsEnabled(boolean v) { if (v != fluidsEnabled) { fluidsEnabled = v; bumpLocalEdit(); } }
-    public void setGasEnabled(boolean v)    { if (v != gasEnabled)    { gasEnabled    = v; bumpLocalEdit(); } }
+    public void setItemsEnabled(boolean v)  {
+        if (v == itemsEnabled) return;
+        itemsEnabled = v;
+        bumpLocalEdit();
+        // Toggling participation on a receiver changes whether emitters have a valid target for
+        // its subscribed subchannels — bump the channel-level mask version so every emitter wipes
+        // its decision cache on the next tick and re-evaluates instead of serving the stale
+        // "no loaded receiver" REJECT that was cached while this device was off.
+        bumpChannelItemsVersion();
+    }
+    public void setFluidsEnabled(boolean v) {
+        if (v == fluidsEnabled) return;
+        fluidsEnabled = v;
+        bumpLocalEdit();
+        bumpChannelFluidsVersion();
+    }
+    public void setGasEnabled(boolean v) {
+        if (v == gasEnabled) return;
+        gasEnabled = v;
+        bumpLocalEdit();
+        bumpChannelGasVersion();
+    }
+
+    private void bumpChannelItemsVersion()  { bumpChannelVersion(0); }
+    private void bumpChannelFluidsVersion() { bumpChannelVersion(1); }
+    private void bumpChannelGasVersion()    { bumpChannelVersion(2); }
+
+    private void bumpChannelVersion(int kind) {
+        if (!(level instanceof ServerLevel sl) || channelId == null) return;
+        var ch = ChannelData.get(sl.getServer()).getChannel(channelId);
+        if (ch == null) return;
+        switch (kind) {
+            case 0 -> ch.itemConfig().bumpRoutingVersion();
+            case 1 -> ch.fluidConfig().bumpRoutingVersion();
+            case 2 -> ch.gasConfig().bumpRoutingVersion();
+            default -> { /* unreachable */ }
+        }
+        ChannelData.get(sl.getServer()).setDirty();
+    }
 
     /* ---- dispatch strategy ---- */
     public DispatchStrategy getItemDispatch()  { return itemDispatch; }
@@ -410,6 +554,11 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         if (itemDispatch  != DispatchStrategy.SERVE_FIRST) tag.putByte("ItemDispatch",  (byte) itemDispatch.ordinal());
         if (fluidDispatch != DispatchStrategy.SERVE_FIRST) tag.putByte("FluidDispatch", (byte) fluidDispatch.ordinal());
         if (gasDispatch   != DispatchStrategy.SERVE_FIRST) tag.putByte("GasDispatch",   (byte) gasDispatch.ordinal());
+        // Side masks: only write when non-default to keep NBT clean.
+        if (itemSideMask  != 0x3F) tag.putByte("ItemSideMask",  (byte) (itemSideMask  & 0x3F));
+        if (fluidSideMask != 0x3F) tag.putByte("FluidSideMask", (byte) (fluidSideMask & 0x3F));
+        if (gasSideMask   != 0x3F) tag.putByte("GasSideMask",   (byte) (gasSideMask   & 0x3F));
+        if (redstoneMode != RedstoneMode.IGNORE) tag.putByte("RedstoneMode", (byte) redstoneMode.ordinal());
     }
 
     @Override
@@ -439,6 +588,10 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         itemDispatch  = DispatchStrategy.byOrdinal(tag.getByte("ItemDispatch"));
         fluidDispatch = DispatchStrategy.byOrdinal(tag.getByte("FluidDispatch"));
         gasDispatch   = DispatchStrategy.byOrdinal(tag.getByte("GasDispatch"));
+        itemSideMask  = tag.contains("ItemSideMask")  ? (tag.getByte("ItemSideMask")  & 0x3F) : 0x3F;
+        fluidSideMask = tag.contains("FluidSideMask") ? (tag.getByte("FluidSideMask") & 0x3F) : 0x3F;
+        gasSideMask   = tag.contains("GasSideMask")   ? (tag.getByte("GasSideMask")   & 0x3F) : 0x3F;
+        redstoneMode  = tag.contains("RedstoneMode")  ? RedstoneMode.byOrdinal(tag.getByte("RedstoneMode")) : RedstoneMode.IGNORE;
     }
 
     private static ListTag saveUuidList(LinkedHashSet<java.util.UUID> set) {

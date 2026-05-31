@@ -253,5 +253,27 @@ public class QuantumChanneling {
         public static void onClientSetup(FMLClientSetupEvent event) {
             event.enqueueWork(() -> MenuScreens.register(PHOTON_NODE_MENU.get(), PhotonNodeScreen::new));
         }
+
+        /**
+         * Bind the custom BlockEntityRenderer for emitter + receiver. The renderer draws the
+         * additive glow ball and the beams into connected faces; the baked block model provides
+         * only the dark containment shell + port frames around it.
+         */
+        @SubscribeEvent
+        public static void onRegisterRenderers(net.minecraftforge.client.event.EntityRenderersEvent.RegisterRenderers event) {
+            event.registerBlockEntityRenderer(PHOTON_EMITTER_BE.get(),
+                    ctx -> new com.quantumchanneling.client.render.PhotonNodeRenderer<>(ctx));
+            event.registerBlockEntityRenderer(PHOTON_RECEIVER_BE.get(),
+                    ctx -> new com.quantumchanneling.client.render.PhotonNodeRenderer<>(ctx));
+        }
+
+        /**
+         * Load the custom GLSL programs the BER draws through. The shaders themselves live under
+         * assets/quantumchanneling/shaders/core/ — see {@link com.quantumchanneling.client.render.PhotonShaders}.
+         */
+        @SubscribeEvent
+        public static void onRegisterShaders(net.minecraftforge.client.event.RegisterShadersEvent event) {
+            com.quantumchanneling.client.render.PhotonShaders.register(event);
+        }
     }
 }

@@ -212,6 +212,49 @@ public final class ModMessages {
         CHANNEL.messageBuilder(SyncServerConfigPacket.class, id++, NetworkDirection.PLAY_TO_CLIENT)
                 .encoder(SyncServerConfigPacket::encode).decoder(SyncServerConfigPacket::decode)
                 .consumerMainThread(SyncServerConfigPacket::handle).add();
+
+        // Tag filter entries — add/remove a tag id alongside the existing item-id entries.
+        CHANNEL.messageBuilder(AddSubchannelTagItemPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddSubchannelTagItemPacket::encode).decoder(AddSubchannelTagItemPacket::decode)
+                .consumerMainThread(AddSubchannelTagItemPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveSubchannelTagItemPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveSubchannelTagItemPacket::encode).decoder(RemoveSubchannelTagItemPacket::decode)
+                .consumerMainThread(RemoveSubchannelTagItemPacket::handle).add();
+        CHANNEL.messageBuilder(AddSubchannelTagFluidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddSubchannelTagFluidPacket::encode).decoder(AddSubchannelTagFluidPacket::decode)
+                .consumerMainThread(AddSubchannelTagFluidPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveSubchannelTagFluidPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveSubchannelTagFluidPacket::encode).decoder(RemoveSubchannelTagFluidPacket::decode)
+                .consumerMainThread(RemoveSubchannelTagFluidPacket::handle).add();
+        CHANNEL.messageBuilder(AddSubchannelTagGasPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(AddSubchannelTagGasPacket::encode).decoder(AddSubchannelTagGasPacket::decode)
+                .consumerMainThread(AddSubchannelTagGasPacket::handle).add();
+        CHANNEL.messageBuilder(RemoveSubchannelTagGasPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(RemoveSubchannelTagGasPacket::encode).decoder(RemoveSubchannelTagGasPacket::decode)
+                .consumerMainThread(RemoveSubchannelTagGasPacket::handle).add();
+
+        // Cosmetic color swatch on a subchannel — one packet, kind byte picks item/fluid/gas.
+        CHANNEL.messageBuilder(SetSubchannelColorPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetSubchannelColorPacket::encode).decoder(SetSubchannelColorPacket::decode)
+                .consumerMainThread(SetSubchannelColorPacket::handle).add();
+
+        // Per-side enable masks + redstone gate.
+        CHANNEL.messageBuilder(SetSideMaskPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetSideMaskPacket::encode).decoder(SetSideMaskPacket::decode)
+                .consumerMainThread(SetSideMaskPacket::handle).add();
+        CHANNEL.messageBuilder(SetRedstoneModePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(SetRedstoneModePacket::encode).decoder(SetRedstoneModePacket::decode)
+                .consumerMainThread(SetRedstoneModePacket::handle).add();
+
+        // Channel clone — copy subchannels from one emitter to another.
+        CHANNEL.messageBuilder(CloneEmitterSubchannelsPacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(CloneEmitterSubchannelsPacket::encode).decoder(CloneEmitterSubchannelsPacket::decode)
+                .consumerMainThread(CloneEmitterSubchannelsPacket::handle).add();
+
+        // Ping device — short particle/glow effect on the device.
+        CHANNEL.messageBuilder(PingDevicePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
+                .encoder(PingDevicePacket::encode).decoder(PingDevicePacket::decode)
+                .consumerMainThread(PingDevicePacket::handle).add();
     }
 
     public static void sendToServer(Object msg) { CHANNEL.sendToServer(msg); }

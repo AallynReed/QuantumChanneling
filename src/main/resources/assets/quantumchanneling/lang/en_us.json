@@ -103,8 +103,8 @@
   "gui.quantumchanneling.charge.armor.chest": "Chest",
   "gui.quantumchanneling.charge.armor.legs":  "Legs",
   "gui.quantumchanneling.charge.armor.feet":  "Feet",
-  "gui.quantumchanneling.charge.baubles": "Baubles (Curios)",
-  "gui.quantumchanneling.charge.baubles.not_installed": "Disabled — install Curios to enable",
+  "gui.quantumchanneling.charge.curios": "Curios",
+  "gui.quantumchanneling.charge.curios.not_installed": "Disabled — install Curios to enable",
 
   "gui.quantumchanneling.modal.confirm": "Confirm",
   "gui.quantumchanneling.modal.cancel": "Cancel",

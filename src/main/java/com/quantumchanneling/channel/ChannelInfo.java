@@ -164,7 +164,13 @@ public record ChannelInfo(
             /** Per-device dispatch strategies — apply to receivers (emitter) or adjacent invs (receiver). */
             DispatchStrategy itemDispatch,
             DispatchStrategy fluidDispatch,
-            DispatchStrategy gasDispatch
+            DispatchStrategy gasDispatch,
+            /** 6-bit side-armed masks (bit N = side with {@code Direction.get3DDataValue() == N}). */
+            byte itemSideMask,
+            byte fluidSideMask,
+            byte gasSideMask,
+            /** Redstone gate ordinal — 0 ignore, 1 off-when-powered, 2 off-when-unpowered. */
+            byte redstoneMode
     ) {
         public void write(FriendlyByteBuf b) {
             b.writeUtf(dim, 80);
@@ -197,6 +203,10 @@ public record ChannelInfo(
             b.writeByte(itemDispatch.ordinal());
             b.writeByte(fluidDispatch.ordinal());
             b.writeByte(gasDispatch.ordinal());
+            b.writeByte(itemSideMask);
+            b.writeByte(fluidSideMask);
+            b.writeByte(gasSideMask);
+            b.writeByte(redstoneMode);
         }
         public static MemberPos read(FriendlyByteBuf b) {
             String dim = b.readUtf(80);
@@ -235,9 +245,14 @@ public record ChannelInfo(
             DispatchStrategy itemD  = DispatchStrategy.byOrdinal(b.readByte());
             DispatchStrategy fluidD = DispatchStrategy.byOrdinal(b.readByte());
             DispatchStrategy gasD   = DispatchStrategy.byOrdinal(b.readByte());
+            byte itemMask  = b.readByte();
+            byte fluidMask = b.readByte();
+            byte gasMask   = b.readByte();
+            byte redMode   = b.readByte();
             return new MemberPos(dim, pos, type, pri, surge, cl, cap, rate, name, subs, voidF,
                     fluidSubs, fluidVoidF, gasSubs, gasVoidF, itEn, flEn, gaEn,
-                    itemSubs, fluidSubchans, gasSubchans, itemD, fluidD, gasD);
+                    itemSubs, fluidSubchans, gasSubchans, itemD, fluidD, gasD,
+                    itemMask, fluidMask, gasMask, redMode);
         }
         public BlockPos pos() { return BlockPos.of(packedPos); }
         public String typeName() {
@@ -374,6 +389,8 @@ public record ChannelInfo(
             DispatchStrategy itemD = DispatchStrategy.SERVE_FIRST;
             DispatchStrategy fluidD = DispatchStrategy.SERVE_FIRST;
             DispatchStrategy gasD = DispatchStrategy.SERVE_FIRST;
+            byte itemMask = 0x3F, fluidMask = 0x3F, gasMask = 0x3F;
+            byte redMode = 0;
             ServerLevel level = server.getLevel(gp.dimension());
             if (level != null && level.isLoaded(gp.pos())) {
                 BlockEntity be = level.getBlockEntity(gp.pos());
@@ -392,6 +409,10 @@ public record ChannelInfo(
                     itemD  = bound.getItemDispatch();
                     fluidD = bound.getFluidDispatch();
                     gasD   = bound.getGasDispatch();
+                    itemMask  = (byte) bound.getItemSideMask();
+                    fluidMask = (byte) bound.getFluidSideMask();
+                    gasMask   = (byte) bound.getGasSideMask();
+                    redMode   = (byte) bound.getRedstoneMode().ordinal();
                 }
                 if (be instanceof PhotonEmitterBlockEntity em) {
                     type = TYPE_EMITTER; emitterCount++; rate = em.getLastTickThroughput(); totalIn += rate;
@@ -412,7 +433,8 @@ public record ChannelInfo(
             }
             ms.add(new MemberPos(dim, packed, type, priority, surge, chunkLoaded, cap, rate,
                     customName, subs, voidFilterCopy, fluidSubs, fluidVoidFilterCopy, gasSubs, gasVoidFilterCopy,
-                    itEn, flEn, gaEn, itemHosted, fluidHosted, gasHosted, itemD, fluidD, gasD));
+                    itEn, flEn, gaEn, itemHosted, fluidHosted, gasHosted, itemD, fluidD, gasD,
+                    itemMask, fluidMask, gasMask, redMode));
         }
         boolean canManage = net.canManage(viewerId);
         boolean canUse = net.canUse(viewerId);

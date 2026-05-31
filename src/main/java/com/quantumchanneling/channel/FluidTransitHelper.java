@@ -66,7 +66,7 @@ public final class FluidTransitHelper {
             if (lvl == null || !lvl.isLoaded(gp.pos())) continue;
             BlockEntity be = lvl.getBlockEntity(gp.pos());
             if (!(be instanceof PhotonReceiverBlockEntity rcv)) continue;
-            if (!rcv.isFluidsEnabled()) continue;
+            if (!rcv.isResourceGate(rcv.isFluidsEnabled())) continue;
             if (rcv.isSubscribedToFluid(subchannelId)) return true;
         }
         return false;
@@ -82,7 +82,7 @@ public final class FluidTransitHelper {
             if (lvl == null || !lvl.isLoaded(gp.pos())) continue;
             BlockEntity be = lvl.getBlockEntity(gp.pos());
             if (!(be instanceof PhotonReceiverBlockEntity rcv)) continue;
-            if (!rcv.isFluidsEnabled()) continue;
+            if (!rcv.isResourceGate(rcv.isFluidsEnabled())) continue;
             if (!rcv.isSubscribedToFluid(subchannelId)) continue;
             out.add(rcv);
         }
@@ -96,11 +96,22 @@ public final class FluidTransitHelper {
     public static FluidStack route(ServerLevel level, PhotonEmitterBlockEntity emitter,
                                    QuantumChannel channel, FluidStack stack, IFluidHandler.FluidAction action) {
         Decision d = emitter.decideFluid(channel, stack);
-        return switch (d.kind) {
-            case VOID -> FluidStack.EMPTY;
-            case REJECT -> stack;
-            case ROUTE -> pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, action);
-        };
+        switch (d.kind) {
+            case VOID: return FluidStack.EMPTY;
+            case REJECT: return stack;
+            case ROUTE: {
+                FluidStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, action);
+                if (action.execute()) {
+                    int moved = stack.getAmount() - leftover.getAmount();
+                    if (moved > 0) {
+                        FluidSubchannel sub = emitter.fluidSubchannel(d.subchannelId);
+                        if (sub != null) sub.recordRouted(moved);
+                    }
+                }
+                return leftover;
+            }
+            default: return stack;
+        }
     }
 
     private static FluidStack pushToReceivers(MinecraftServer server,
@@ -118,10 +129,19 @@ public final class FluidTransitHelper {
             for (int i = 0; i < targets.size(); i++) rotated.add(targets.get((start + i) % targets.size()));
             targets = rotated;
         }
+        long now = (emitter.getLevel() != null) ? emitter.getLevel().getGameTime() : 0L;
         FluidStack remaining = stack.copy();
         for (PhotonReceiverBlockEntity rcv : targets) {
             if (remaining.isEmpty()) break;
+            long key = rcv.getBlockPos().asLong();
+            if (emitter.isFluidReceiverCooledDown(key, now)) continue;
+            int before = remaining.getAmount();
             remaining = pushToAdjacentTanks(rcv, remaining, action);
+            if (action.execute()) {
+                int delivered = before - remaining.getAmount();
+                if (delivered > 0) emitter.clearFluidReceiverCooldown(key);
+                else               emitter.markFluidReceiverRejected(key, now);
+            }
         }
         return remaining;
     }
@@ -139,6 +159,7 @@ public final class FluidTransitHelper {
         for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
             Direction side = sides[(startIdx + i) % sides.length];
+            if (!origin.isFluidSideArmed(side)) continue;
             BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
             if (neighbor == null) continue;
             IFluidHandler dest = neighbor.getCapability(ForgeCapabilities.FLUID_HANDLER, side.getOpposite()).orElse(null);
@@ -159,6 +180,7 @@ public final class FluidTransitHelper {
         if (!emitter.isFluidsEnabled()) return 0;
         BlockPos origin = emitter.getBlockPos();
         for (Direction side : Direction.values()) {
+            if (!emitter.isFluidSideArmed(side)) continue;
             BlockEntity neighbor = level.getBlockEntity(origin.relative(side));
             if (neighbor == null) continue;
             IFluidHandler src = neighbor.getCapability(ForgeCapabilities.FLUID_HANDLER, side.getOpposite()).orElse(null);
@@ -192,7 +214,12 @@ public final class FluidTransitHelper {
                     if (taken.isEmpty()) continue;
                     FluidStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, IFluidHandler.FluidAction.EXECUTE);
                     // Drained-but-not-deposited would be a bug, but log-free path: just lose it.
-                    return taken.getAmount() - leftover.getAmount();
+                    int moved = taken.getAmount() - leftover.getAmount();
+                    if (moved > 0) {
+                        FluidSubchannel sub = emitter.fluidSubchannel(d.subchannelId);
+                        if (sub != null) sub.recordRouted(moved);
+                    }
+                    return moved;
                 }
             }
         }

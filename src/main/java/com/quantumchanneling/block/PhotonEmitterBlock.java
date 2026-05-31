@@ -3,11 +3,8 @@ package com.quantumchanneling.block;
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -28,7 +25,6 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.network.NetworkHooks;
 import org.jetbrains.annotations.Nullable;
-import org.joml.Vector3f;
 
 public class PhotonEmitterBlock extends Block implements EntityBlock {
     public PhotonEmitterBlock(Properties properties) {
@@ -69,17 +65,9 @@ public class PhotonEmitterBlock extends Block implements EntityBlock {
         return PhotonShape.shape(state);
     }
 
-    /** Blue accent particles drifting around the orb — sells the "contained light source" feel. */
-    @Override
-    public void animateTick(BlockState state, Level level, BlockPos pos, RandomSource random) {
-        if (random.nextInt(8) != 0) return;
-        Vector3f color = new Vector3f(0.31f, 0.63f, 1.0f);    // emitter accent (blue)
-        DustParticleOptions opts = new DustParticleOptions(color, 1.0f);
-        double x = pos.getX() + 0.5 + (random.nextDouble() - 0.5) * 0.55;
-        double y = pos.getY() + 0.5 + (random.nextDouble() - 0.5) * 0.45;
-        double z = pos.getZ() + 0.5 + (random.nextDouble() - 0.5) * 0.55;
-        level.addParticle(opts, x, y, z, 0, 0.015, 0);
-    }
+    // No animateTick — the BER (PhotonNodeRenderer) now provides the visual idle animation
+    // (pulsing glow ball + flowing beams). Particles felt redundant on top of the additive glow
+    // and made the block read as "dusty" rather than "energized".
 
     @Override
     public BlockState rotate(BlockState state, Rotation rot) {

@@ -267,9 +267,10 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     }
 
     public void onChannelsRefreshed(List<ChannelInfo> latest) {
-        // Avoid clobbering EditBox state on every poll — only rebuild when something actually
-        // changed for the channel we're showing. Otherwise the label / status text updates
-        // through the data flow but the widgets stay intact.
+        // Only rebuild widgets on STRUCTURAL change. Volatile fields (throughput, lastTickRate,
+        // chargingNow) update via direct reads from currentChannel during render — they should
+        // never force a rebuild because doing so would clobber active EditBox state (cursor
+        // position, focus, typed-but-not-yet-submitted text).
         ChannelInfo prevCurrent = currentChannel;
         this.channels = new ArrayList<>(latest);
         resolveCurrentChannel();
@@ -277,9 +278,67 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             this.selectedInList = channels.stream()
                     .filter(c -> c.id().equals(selectedInList.id())).findFirst().orElse(null);
         }
-        boolean structuralChange = (prevCurrent == null) != (currentChannel == null)
-                || (prevCurrent != null && currentChannel != null && !prevCurrent.equals(currentChannel));
-        if (structuralChange) rebuildAll();
+        if (structurallyDiffers(prevCurrent, currentChannel)) rebuildAll();
+    }
+
+    /**
+     * Compares the parts of ChannelInfo that change widget layout or visible state, excluding
+     * per-tick stats that should flow through the next render without rebuilding. Returning false
+     * here means the open screen keeps its widgets intact (EditBoxes preserve text and focus).
+     */
+    private static boolean structurallyDiffers(@Nullable ChannelInfo a, @Nullable ChannelInfo b) {
+        if (a == b) return false;
+        if (a == null || b == null) return true;
+        if (!a.id().equals(b.id())) return true;
+        if (!a.name().equals(b.name())) return true;
+        if (a.color() != b.color()) return true;
+        if (a.chargingSlots() != b.chargingSlots()) return true;
+        if (a.memberCount() != b.memberCount()) return true;
+        if (a.canManage() != b.canManage()) return true;
+        if (a.canUse() != b.canUse()) return true;
+        if (a.isPublic() != b.isPublic()) return true;
+        if (a.hasPin() != b.hasPin()) return true;
+        // Member set — positions, types, per-device settings, and subchannel topology drive
+        // which widgets appear. Don't compare lastTickRate (tick-volatile).
+        var ams = a.memberPositions();
+        var bms = b.memberPositions();
+        if (ams.size() != bms.size()) return true;
+        for (int i = 0; i < ams.size(); i++) {
+            var ma = ams.get(i);
+            var mb = bms.get(i);
+            if (ma.packedPos() != mb.packedPos()) return true;
+            if (ma.type() != mb.type()) return true;
+            if (ma.priority() != mb.priority()) return true;
+            if (ma.surge() != mb.surge()) return true;
+            if (ma.chunkLoaded() != mb.chunkLoaded()) return true;
+            if (ma.cap() != mb.cap()) return true;
+            if (!ma.customName().equals(mb.customName())) return true;
+            if (ma.itemsEnabled()  != mb.itemsEnabled())  return true;
+            if (ma.fluidsEnabled() != mb.fluidsEnabled()) return true;
+            if (ma.gasEnabled()    != mb.gasEnabled())    return true;
+            if (ma.itemDispatch()  != mb.itemDispatch())  return true;
+            if (ma.fluidDispatch() != mb.fluidDispatch()) return true;
+            if (ma.gasDispatch()   != mb.gasDispatch())   return true;
+            if (!ma.subscribedSubchannels().equals(mb.subscribedSubchannels())) return true;
+            if (!ma.subscribedFluidSubchannels().equals(mb.subscribedFluidSubchannels())) return true;
+            if (!ma.subscribedGasSubchannels().equals(mb.subscribedGasSubchannels())) return true;
+            if (ma.itemSubchannels().size()  != mb.itemSubchannels().size())  return true;
+            if (ma.fluidSubchannels().size() != mb.fluidSubchannels().size()) return true;
+            if (ma.gasSubchannels().size()   != mb.gasSubchannels().size())   return true;
+        }
+        // Permission table — role and self-block flags affect Access tab widgets.
+        var aps = a.players();
+        var bps = b.players();
+        if (aps.size() != bps.size()) return true;
+        for (int i = 0; i < aps.size(); i++) {
+            var pa = aps.get(i);
+            var pb = bps.get(i);
+            if (!pa.id().equals(pb.id())) return true;
+            if (pa.permission() != pb.permission()) return true;
+            if (pa.chargingSubscribed() != pb.chargingSubscribed()) return true;
+            if (pa.chargingBlocked() != pb.chargingBlocked()) return true;
+        }
+        return false;
     }
 
     private void resolveCurrentChannel() {
@@ -1171,7 +1230,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             if (ChargingSlots.has(chargeMask, ChargingSlots.ARMOR))
                 cy = drawChInfoBullet(gfx, contentX + 4, cy, "gui.quantumchanneling.charge.armor");
             if (ChargingSlots.has(chargeMask, ChargingSlots.CURIOS))
-                cy = drawChInfoBullet(gfx, contentX + 4, cy, "gui.quantumchanneling.charge.baubles");
+                cy = drawChInfoBullet(gfx, contentX + 4, cy, "gui.quantumchanneling.charge.curios");
         }
 
         cy += 4;
@@ -1818,7 +1877,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         return -1;
     }
 
-    /* -------- Charge tab: Curios / Baubles placeholder card -------- */
+    /* -------- Charge tab: Curios placeholder card -------- */
     private static final int CURIOS_CARD_H = 22;
 
     private int curiosCardTop() {
@@ -1842,7 +1901,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (!curiosLoaded) {
             border = 0xFF252A35; body = 0xFF080C12;
             titleColor = 0xFF606878; stateColor = 0xFF707888; prColor = 0xFF50586A;
-            state = Component.translatable("gui.quantumchanneling.charge.baubles.not_installed");
+            state = Component.translatable("gui.quantumchanneling.charge.curios.not_installed");
         } else if (serverDisabled) {
             border = 0xFF4A2030; body = 0xFF1A0E14;
             titleColor = 0xFF806060; stateColor = 0xFFE07070; prColor = 0xFF50586A;
@@ -1859,7 +1918,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         gfx.fill(cx - 1, y - 1, cx + rw + 1, y + CURIOS_CARD_H + 1, border);
         gfx.fill(cx, y, cx + rw, y + CURIOS_CARD_H, body);
 
-        gfx.drawString(font, Component.translatable("gui.quantumchanneling.charge.baubles"),
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.charge.curios"),
                 cx + 8, y + 4, titleColor, false);
         gfx.drawString(font, state, cx + 8, y + CURIOS_CARD_H - 12, stateColor, false);
 
@@ -3124,10 +3183,12 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         int subCount = visibleItemSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         if (cycleSize == 0) {
+            // y starts below the dispatch button row (y=50 + 18 = 68) with a small gap so the
+            // helper text doesn't bleed into the button when there are zero subchannels.
             Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
                     .withStyle(ChatFormatting.GRAY);
             var lines = font.split(msg, rw - 16);
-            int y = topPos + CONTENT_TOP + 60;
+            int y = topPos + CONTENT_TOP + 78;
             for (var line : lines) {
                 int w = font.width(line);
                 gfx.drawString(font, line, leftPos + (BG_W - w) / 2, y, 0xFF888888, false);
@@ -3634,10 +3695,12 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         int subCount = visibleFluidSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         if (cycleSize == 0) {
+            // y starts below the dispatch button row (y=50 + 18 = 68) with a small gap so the
+            // helper text doesn't bleed into the button when there are zero subchannels.
             Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
                     .withStyle(ChatFormatting.GRAY);
             var lines = font.split(msg, rw - 16);
-            int y = topPos + CONTENT_TOP + 60;
+            int y = topPos + CONTENT_TOP + 78;
             for (var line : lines) {
                 int w = font.width(line);
                 gfx.drawString(font, line, leftPos + (BG_W - w) / 2, y, 0xFF888888, false);
@@ -4036,10 +4099,12 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         int subCount = visibleGasSubchannels().size();
         int cycleSize = subCount + (emitter ? 1 : 0);
         if (cycleSize == 0) {
+            // y starts below the dispatch button row (y=50 + 18 = 68) with a small gap so the
+            // helper text doesn't bleed into the button when there are zero subchannels.
             Component msg = Component.translatable("gui.quantumchanneling.items.empty_state")
                     .withStyle(ChatFormatting.GRAY);
             var lines = font.split(msg, rw - 16);
-            int y = topPos + CONTENT_TOP + 60;
+            int y = topPos + CONTENT_TOP + 78;
             for (var line : lines) {
                 int w = font.width(line);
                 gfx.drawString(font, line, leftPos + (BG_W - w) / 2, y, 0xFF888888, false);

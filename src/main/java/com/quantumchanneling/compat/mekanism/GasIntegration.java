@@ -47,16 +47,37 @@ public final class GasIntegration {
                                   QuantumChannel channel,
                                   GasStack stack) {
         if (stack == null || stack.isEmpty()) return Decision.REJECT;
-        ResourceLocation gasId = MekanismAPI.gasRegistry().getKey(stack.getType());
+        Gas gas = stack.getType();
+        ResourceLocation gasId = MekanismAPI.gasRegistry().getKey(gas);
         if (gasId == null) return Decision.REJECT;
-        if (!emitter.gasVoidFilter().matchesId(gasId)) return Decision.VOID;
+        java.util.function.Predicate<ResourceLocation> isInTag = tagId -> gasHasTag(gas, tagId);
+        if (!emitter.gasVoidFilter().matchesIdWithTags(gasId, isInTag)) return Decision.VOID;
         if (emitter.gasSubchannelCount() == 0) return Decision.REJECT;
         for (GasSubchannel sub : emitter.gasSubchannels()) {
-            if (!sub.filter().matchesId(gasId)) continue;
+            if (!sub.filter().matchesIdWithTags(gasId, isInTag)) continue;
             if (server != null && !hasLoadedReceiverFor(server, channel, sub.id())) continue;
             return Decision.route(sub.id());
         }
         return Decision.REJECT;
+    }
+
+    /**
+     * True when {@code gas} belongs to the tag with the given id under Mekanism's gas registry.
+     * Returns false on any registry hiccup so a stale tag id can't accidentally pass the void
+     * filter. Looked up per-call — the registry's own tag manager handles caching.
+     */
+    private static boolean gasHasTag(Gas gas, ResourceLocation tagId) {
+        if (gas == null || tagId == null) return false;
+        try {
+            var registry = MekanismAPI.gasRegistry();
+            var tagManager = registry.tags();
+            if (tagManager == null) return false;
+            var tagKey = net.minecraft.tags.TagKey.create(registry.getRegistryKey(), tagId);
+            var tag = tagManager.getTag(tagKey);
+            return tag != null && tag.contains(gas);
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
     /** Emitter passthrough — any {@code insertChemical} routes through the channel pipeline. */
@@ -99,11 +120,22 @@ public final class GasIntegration {
     public static GasStack route(MinecraftServer server, PhotonEmitterBlockEntity emitter,
                                  QuantumChannel channel, GasStack stack, Action action) {
         Decision d = decide(server, emitter, channel, stack);
-        return switch (d.kind) {
-            case VOID -> GasStack.EMPTY;
-            case REJECT -> stack;
-            case ROUTE -> pushToReceivers(server, emitter, channel, d.subchannelId, stack, action);
-        };
+        switch (d.kind) {
+            case VOID: return GasStack.EMPTY;
+            case REJECT: return stack;
+            case ROUTE: {
+                GasStack leftover = pushToReceivers(server, emitter, channel, d.subchannelId, stack, action);
+                if (action == Action.EXECUTE) {
+                    long moved = stack.getAmount() - leftover.getAmount();
+                    if (moved > 0) {
+                        GasSubchannel sub = emitter.gasSubchannel(d.subchannelId);
+                        if (sub != null) sub.recordRouted((int) Math.min(moved, Integer.MAX_VALUE));
+                    }
+                }
+                return leftover;
+            }
+            default: return stack;
+        }
     }
 
     public static boolean hasLoadedReceiverFor(MinecraftServer server, QuantumChannel channel, UUID subchannelId) {
@@ -113,7 +145,7 @@ public final class GasIntegration {
             if (lvl == null || !lvl.isLoaded(gp.pos())) continue;
             BlockEntity be = lvl.getBlockEntity(gp.pos());
             if (!(be instanceof PhotonReceiverBlockEntity rcv)) continue;
-            if (!rcv.isGasEnabled()) continue;
+            if (!rcv.isResourceGate(rcv.isGasEnabled())) continue;
             if (rcv.isSubscribedToGas(subchannelId)) return true;
         }
         return false;
@@ -129,7 +161,7 @@ public final class GasIntegration {
             if (lvl == null || !lvl.isLoaded(gp.pos())) continue;
             BlockEntity be = lvl.getBlockEntity(gp.pos());
             if (!(be instanceof PhotonReceiverBlockEntity rcv)) continue;
-            if (!rcv.isGasEnabled()) continue;
+            if (!rcv.isResourceGate(rcv.isGasEnabled())) continue;
             if (!rcv.isSubscribedToGas(subchannelId)) continue;
             out.add(rcv);
         }
@@ -153,10 +185,19 @@ public final class GasIntegration {
             for (int i = 0; i < targets.size(); i++) rotated.add(targets.get((start + i) % targets.size()));
             targets = rotated;
         }
+        long now = (emitter.getLevel() != null) ? emitter.getLevel().getGameTime() : 0L;
         GasStack remaining = stack.copy();
         for (PhotonReceiverBlockEntity rcv : targets) {
             if (remaining.isEmpty()) break;
+            long key = rcv.getBlockPos().asLong();
+            if (emitter.isGasReceiverCooledDown(key, now)) continue;
+            long before = remaining.getAmount();
             remaining = pushToAdjacentTanks(rcv, remaining, action);
+            if (action == Action.EXECUTE) {
+                long delivered = before - remaining.getAmount();
+                if (delivered > 0) emitter.clearGasReceiverCooldown(key);
+                else               emitter.markGasReceiverRejected(key, now);
+            }
         }
         return remaining;
     }
@@ -174,6 +215,7 @@ public final class GasIntegration {
         for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
             Direction side = sides[(startIdx + i) % sides.length];
+            if (!origin.isGasSideArmed(side)) continue;
             BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
             if (neighbor == null) continue;
             IGasHandler dest = neighbor.getCapability(MekanismCaps.GAS, side.getOpposite()).orElse(null);
@@ -187,16 +229,23 @@ public final class GasIntegration {
         return remaining;
     }
 
-    /** Active-pull cycle: scan emitter's neighbors for an IGasHandler source, drain, route. */
-    public static void pullAndRoute(ServerLevel level, PhotonEmitterBlockEntity emitter, QuantumChannel channel) {
-        if (!emitter.isGasEnabled()) return;
-        int budget = channel.gasConfig().batchSize();
+    /**
+     * Active-pull cycle: scan emitter's neighbors for an IGasHandler source, drain, route.
+     * Returns true when something was actually moved (or voided) so the emitter's adaptive
+     * tick rate knows whether to coast or stay fast.
+     */
+    public static boolean pullAndRoute(ServerLevel level, PhotonEmitterBlockEntity emitter,
+                                       QuantumChannel channel, int budget) {
+        if (budget <= 0 || !emitter.isGasEnabled()) return false;
         for (Direction side : Direction.values()) {
+            if (!emitter.isGasSideArmed(side)) continue;
             BlockEntity neighbor = level.getBlockEntity(emitter.getBlockPos().relative(side));
             if (neighbor == null) continue;
             IGasHandler src = neighbor.getCapability(MekanismCaps.GAS, side.getOpposite()).orElse(null);
             if (src == null) continue;
             for (int tank = 0; tank < src.getTanks(); tank++) {
+                // Cheap empty check — see ItemTransitHelper.scanAndRoute for the same idea.
+                if (src.getChemicalInTank(tank).isEmpty()) continue;
                 GasStack peek = src.extractChemical(tank, budget, Action.SIMULATE);
                 if (peek.isEmpty()) continue;
                 Decision d = decide(level.getServer(), emitter, channel, peek);
@@ -204,7 +253,7 @@ public final class GasIntegration {
                     case REJECT -> { continue; }
                     case VOID -> {
                         src.extractChemical(tank, peek.getAmount(), Action.EXECUTE);
-                        return;
+                        return true;
                     }
                     case ROUTE -> {
                         GasStack simulated = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, peek, Action.SIMULATE);
@@ -212,11 +261,17 @@ public final class GasIntegration {
                         if (wouldMove <= 0) continue;
                         GasStack taken = src.extractChemical(tank, wouldMove, Action.EXECUTE);
                         if (taken.isEmpty()) continue;
-                        pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, Action.EXECUTE);
-                        return;
+                        GasStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, Action.EXECUTE);
+                        long moved = taken.getAmount() - leftover.getAmount();
+                        if (moved > 0) {
+                            GasSubchannel sub = emitter.gasSubchannel(d.subchannelId);
+                            if (sub != null) sub.recordRouted((int) Math.min(moved, Integer.MAX_VALUE));
+                        }
+                        return true;
                     }
                 }
             }
         }
+        return false;
     }
 }

@@ -88,7 +88,7 @@ public final class ItemTransitHelper {
             if (lvl == null || !lvl.isLoaded(gp.pos())) continue;
             BlockEntity be = lvl.getBlockEntity(gp.pos());
             if (!(be instanceof PhotonReceiverBlockEntity rcv)) continue;
-            if (!rcv.isItemsEnabled()) continue;
+            if (!rcv.isResourceGate(rcv.isItemsEnabled())) continue;
             if (rcv.isSubscribedTo(subchannelId)) return true;
         }
         return false;
@@ -105,7 +105,7 @@ public final class ItemTransitHelper {
             if (lvl == null || !lvl.isLoaded(gp.pos())) continue;
             BlockEntity be = lvl.getBlockEntity(gp.pos());
             if (!(be instanceof PhotonReceiverBlockEntity rcv)) continue;
-            if (!rcv.isItemsEnabled()) continue;
+            if (!rcv.isResourceGate(rcv.isItemsEnabled())) continue;
             if (!rcv.isSubscribedTo(subchannelId)) continue;
             out.add(rcv);
         }
@@ -123,11 +123,22 @@ public final class ItemTransitHelper {
     public static ItemStack route(ServerLevel level, PhotonEmitterBlockEntity emitter,
                                   QuantumChannel channel, ItemStack stack, boolean simulate) {
         Decision d = emitter.decide(channel, stack);
-        return switch (d.kind) {
-            case VOID -> ItemStack.EMPTY;
-            case REJECT -> stack;
-            case ROUTE -> pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, simulate);
-        };
+        switch (d.kind) {
+            case VOID: return ItemStack.EMPTY;
+            case REJECT: return stack;
+            case ROUTE: {
+                ItemStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, stack, simulate);
+                if (!simulate) {
+                    int moved = stack.getCount() - leftover.getCount();
+                    if (moved > 0) {
+                        ItemSubchannel sub = emitter.itemSubchannel(d.subchannelId);
+                        if (sub != null) sub.recordRouted(moved);
+                    }
+                }
+                return leftover;
+            }
+            default: return stack;
+        }
     }
 
     private static ItemStack pushToReceivers(MinecraftServer server,
@@ -137,10 +148,19 @@ public final class ItemTransitHelper {
         List<PhotonReceiverBlockEntity> targets = loadedReceiversFor(server, channel, subchannelId);
         if (targets.isEmpty()) return stack;
         targets = applyEmitterDispatch(emitter, targets, simulate);
+        long now = (emitter.getLevel() != null) ? emitter.getLevel().getGameTime() : 0L;
         ItemStack remaining = stack;
         for (PhotonReceiverBlockEntity rcv : targets) {
             if (remaining.isEmpty()) break;
+            long key = rcv.getBlockPos().asLong();
+            if (emitter.isItemReceiverCooledDown(key, now)) continue;
+            int before = remaining.getCount();
             remaining = pushToAdjacentInventory(rcv, remaining, simulate);
+            if (!simulate) {
+                int delivered = before - remaining.getCount();
+                if (delivered > 0) emitter.clearItemReceiverCooldown(key);
+                else               emitter.markItemReceiverRejected(key, now);
+            }
         }
         return remaining;
     }
@@ -176,6 +196,7 @@ public final class ItemTransitHelper {
         for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
             Direction side = sides[(startIdx + i) % sides.length];
+            if (!origin.isItemSideArmed(side)) continue;        // per-side mask gates push-sides
             BlockEntity neighbor = level.getBlockEntity(origin.getBlockPos().relative(side));
             if (neighbor == null) continue;
             IItemHandler dest = neighbor.getCapability(ForgeCapabilities.ITEM_HANDLER, side.getOpposite()).orElse(null);
@@ -201,6 +222,7 @@ public final class ItemTransitHelper {
         if (!emitter.isItemsEnabled()) return 0;
         BlockPos origin = emitter.getBlockPos();
         for (Direction side : Direction.values()) {
+            if (!emitter.isItemSideArmed(side)) continue;       // per-side mask gates pull-sides
             BlockEntity neighbor = level.getBlockEntity(origin.relative(side));
             if (neighbor == null) continue;
             IItemHandler src = neighbor.getCapability(ForgeCapabilities.ITEM_HANDLER, side.getOpposite()).orElse(null);
@@ -214,6 +236,11 @@ public final class ItemTransitHelper {
     private static int scanAndRoute(ServerLevel level, PhotonEmitterBlockEntity emitter,
                                     QuantumChannel channel, IItemHandler src, int budget) {
         for (int slot = 0; slot < src.getSlots(); slot++) {
+            // Cheap empty check first. getStackInSlot is a direct read of the handler's internal
+            // array — no allocation, no extraction logic. Saves the extract-simulate path on
+            // every empty slot of a chest, which is the steady-state cost when an emitter is
+            // adjacent to a partially-empty inventory.
+            if (src.getStackInSlot(slot).isEmpty()) continue;
             ItemStack peek = src.extractItem(slot, budget, true);
             if (peek.isEmpty()) continue;
             Decision d = emitter.decide(channel, peek);
@@ -231,7 +258,15 @@ public final class ItemTransitHelper {
                     if (taken.isEmpty()) continue;
                     ItemStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, false);
                     if (!leftover.isEmpty()) src.insertItem(slot, leftover, false);
-                    return taken.getCount() - leftover.getCount();
+                    int moved = taken.getCount() - leftover.getCount();
+                    if (moved > 0) {
+                        ItemSubchannel sub = emitter.itemSubchannel(d.subchannelId);
+                        if (sub != null) {
+                            sub.recordRouted(moved);
+                            fireRoutedEvent(emitter, sub, com.quantumchanneling.api.IQuantumSubchannelView.Kind.ITEM, moved);
+                        }
+                    }
+                    return moved;
                 }
             }
         }
@@ -242,5 +277,26 @@ public final class ItemTransitHelper {
     public static ResourceLocation idOf(ItemStack stack) {
         if (stack == null || stack.isEmpty()) return null;
         return BuiltInRegistries.ITEM.getKey(stack.getItem());
+    }
+
+    /** Posts a {@link com.quantumchanneling.api.event.ChannelRoutedEvent} on the Forge bus. */
+    static void fireRoutedEvent(PhotonEmitterBlockEntity emitter, ItemSubchannel sub,
+                                com.quantumchanneling.api.IQuantumSubchannelView.Kind kind, int amount) {
+        try {
+            var view = com.quantumchanneling.api.QuantumChannelingAPI.deviceAt(
+                    (ServerLevel) emitter.getLevel(), emitter.getBlockPos()).orElse(null);
+            // The deviceAt() view exposes the subchannel via itemSubchannels(); find the entry that
+            // matches our id so the event carries the same view shape external mods see elsewhere.
+            com.quantumchanneling.api.IQuantumSubchannelView subView = null;
+            if (view != null) {
+                for (var s : view.itemSubchannels()) if (s.id().equals(sub.id())) { subView = s; break; }
+            }
+            if (subView == null) return;   // shouldn't happen, but a missed event is better than NPE
+            net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(
+                    new com.quantumchanneling.api.event.ChannelRoutedEvent(
+                            emitter.getChannelId(), emitter.globalPos(), subView, kind, amount));
+        } catch (Throwable ignored) {
+            // Defensive — never let an API event consumer crash the routing tick.
+        }
     }
 }

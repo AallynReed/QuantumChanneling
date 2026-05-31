@@ -265,6 +265,9 @@ public class ChannelData extends SavedData {
 
     public @Nullable QuantumChannel getChannel(UUID id) { return networks.get(id); }
 
+    /** Unmodifiable view of every known channel. Used by the public API entry point. */
+    public Map<UUID, QuantumChannel> getChannels() { return java.util.Collections.unmodifiableMap(networks); }
+
     /** All channels the player can see: owned, allowed via permission, public, or PIN-gated. */
     public List<QuantumChannel> visibleTo(ServerPlayer player) {
         UUID pid = player.getUUID();

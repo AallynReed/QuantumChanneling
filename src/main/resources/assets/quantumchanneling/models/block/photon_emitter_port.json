@@ -1,0 +1,6 @@
+{
+  "parent": "quantumchanneling:block/photon_port",
+  "textures": {
+    "accent": "quantumchanneling:block/photon_accent_blue"
+  }
+}

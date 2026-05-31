@@ -3,11 +3,8 @@ package com.quantumchanneling.block;
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.blockentity.PhotonReceiverBlockEntity;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
-import net.minecraft.core.particles.DustParticleOptions;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.util.RandomSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
@@ -28,7 +25,6 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraftforge.network.NetworkHooks;
 import org.jetbrains.annotations.Nullable;
-import org.joml.Vector3f;
 
 public class PhotonReceiverBlock extends Block implements EntityBlock {
     public PhotonReceiverBlock(Properties properties) {
@@ -66,17 +62,8 @@ public class PhotonReceiverBlock extends Block implements EntityBlock {
         return PhotonShape.shape(state);
     }
 
-    /** Red accent particles drifting around the orb — receiver counterpart to the emitter's blue. */
-    @Override
-    public void animateTick(BlockState state, Level level, BlockPos pos, RandomSource random) {
-        if (random.nextInt(8) != 0) return;
-        Vector3f color = new Vector3f(1.0f, 0.38f, 0.38f);    // receiver accent (red)
-        DustParticleOptions opts = new DustParticleOptions(color, 1.0f);
-        double x = pos.getX() + 0.5 + (random.nextDouble() - 0.5) * 0.55;
-        double y = pos.getY() + 0.5 + (random.nextDouble() - 0.5) * 0.45;
-        double z = pos.getZ() + 0.5 + (random.nextDouble() - 0.5) * 0.55;
-        level.addParticle(opts, x, y, z, 0, 0.015, 0);
-    }
+    // No animateTick — see PhotonEmitterBlock for the rationale. The BER's pulsing glow + flowing
+    // beam replaces the old dust particles on both emitter and receiver.
 
     @Override
     public BlockState rotate(BlockState state, Rotation rot) {

@@ -153,6 +153,11 @@ dependencies {
     // Compat.mekanismLoaded() gates, so absent Mekanism just leaves those code paths cold.
     compileOnly fg.deobf("mekanism:Mekanism:${minecraft_version}-${mekanism_version}:api")
 
+    // Computer-mod integrations (CC:Tweaked, OpenComputers) are intentionally NOT pulled in at
+    // compile time. Third-party authors can implement drivers / peripherals against the public
+    // QuantumChannelingAPI in com.quantumchanneling.api — no Quantum Channeling source needs to
+    // import their classes. This keeps the build self-contained and immune to upstream maven shifts.
+
     // Example mod dependency using a mod jar from ./libs with a flat dir repository
     // This maps to ./libs/coolmod-${mc_version}-${coolmod_version}.jar
     // The group id is ignored when searching -- in this case, it is "blank"

@@ -12,6 +12,8 @@ public final class Compat {
 
     private static Boolean curios;
     private static Boolean mekanism;
+    private static Boolean computercraft;
+    private static Boolean ftbchunks;
 
     public static boolean curiosLoaded() {
         Boolean v = curios;
@@ -38,5 +40,19 @@ public final class Compat {
     /** True when any mod that provides a heat capability is loaded. Same pattern as gases. */
     public static boolean heatProviderLoaded() {
         return mekanismLoaded();
+    }
+
+    /** True when CC:Tweaked is loaded — the QC peripheral attaches in {@code commonSetup}. */
+    public static boolean computercraftLoaded() {
+        Boolean v = computercraft;
+        if (v == null) { v = ModList.get().isLoaded("computercraft"); computercraft = v; }
+        return v;
+    }
+
+    /** True when FTB Chunks is loaded — the claim-system integration consults it for ownership. */
+    public static boolean ftbChunksLoaded() {
+        Boolean v = ftbchunks;
+        if (v == null) { v = ModList.get().isLoaded("ftbchunks"); ftbchunks = v; }
+        return v;
     }
 }

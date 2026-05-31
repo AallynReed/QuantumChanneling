@@ -1,4 +1,5 @@
 {
+  "__comment": "Equatorial containment ring with circular hollow ports at the middle of each side — the side beams (N/S/E/W) pass through the 2x2 gaps. Four small accent-edged corner posts give the structure a 'ring on four stilts' silhouette. The center is open so the BER glow ball reads unimpeded; vertical beams (Up/Down) pass through the ring's hollow interior.",
   "parent": "block/block",
   "textures": {
     "core":     "quantumchanneling:block/photon_core_dark",
@@ -6,75 +7,111 @@
   },
   "elements": [
     {
-      "__comment": "central glowing orb (4×4×4) — emissive accent, floats inside the containment frame",
-      "from": [6, 6, 6], "to": [10, 10, 10],
-      "faces": {
-        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#accent", "emissivity": 15 },
-        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#accent", "emissivity": 15 },
-        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#accent", "emissivity": 15 }
-      }
-    },
-    {
-      "__comment": "horizontal containment ring at the equator — surrounds the orb",
-      "from": [4, 7, 4], "to": [12, 9, 12],
-      "faces": {
-        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#accent", "emissivity": 15 },
-        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#accent", "emissivity": 15 },
-        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#accent", "emissivity": 15 }
-      }
-    },
-    {
-      "__comment": "dark corner pillar — front-left (connects bottom stud to top stud)",
-      "from": [4, 4, 4], "to": [5, 12, 5],
+      "__comment": "Front edge — left half (x = 5..7). 2x2 gap at x = 7..9 lets the NORTH beam pass.",
+      "from": [5, 7, 4], "to": [7, 9, 5],
       "faces": {
         "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#accent", "emissivity": 15 },
         "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
       }
     },
     {
-      "__comment": "dark corner pillar — front-right",
-      "from": [11, 4, 4], "to": [12, 12, 5],
+      "__comment": "Front edge — right half (x = 9..11).",
+      "from": [9, 7, 4], "to": [11, 9, 5],
       "faces": {
         "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#accent", "emissivity": 15 },
         "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
       }
     },
     {
-      "__comment": "dark corner pillar — back-left",
-      "from": [4, 4, 11], "to": [5, 12, 12],
+      "__comment": "Back edge — left half. 2x2 gap at x = 7..9 lets the SOUTH beam pass.",
+      "from": [5, 7, 11], "to": [7, 9, 12],
       "faces": {
         "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#core" },
         "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
       }
     },
     {
-      "__comment": "dark corner pillar — back-right",
-      "from": [11, 4, 11], "to": [12, 12, 12],
+      "__comment": "Back edge — right half.",
+      "from": [9, 7, 11], "to": [11, 9, 12],
       "faces": {
         "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
-        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#core" },
         "east":  { "texture": "#core" }, "west":  { "texture": "#core" }
       }
     },
     {
-      "__comment": "top accent stud — energy port, visible from UP",
-      "from": [6, 11, 6], "to": [10, 12, 10],
+      "__comment": "Left edge — front half (z = 5..7). 2x2 gap at z = 7..9 lets the WEST beam pass.",
+      "from": [4, 7, 5], "to": [5, 9, 7],
       "faces": {
-        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#accent", "emissivity": 15 },
-        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#accent", "emissivity": 15 },
-        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#accent", "emissivity": 15 }
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west": { "texture": "#core" }
       }
     },
     {
-      "__comment": "bottom accent stud — energy port, visible from DOWN",
-      "from": [6, 4, 6], "to": [10, 5, 10],
+      "__comment": "Left edge — back half (z = 9..11).",
+      "from": [4, 7, 9], "to": [5, 9, 11],
       "faces": {
-        "down":  { "texture": "#accent", "emissivity": 15 }, "up":    { "texture": "#accent", "emissivity": 15 },
-        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#accent", "emissivity": 15 },
-        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#accent", "emissivity": 15 }
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west": { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "Right edge — front half. 2x2 gap at z = 7..9 lets the EAST beam pass.",
+      "from": [11, 7, 5], "to": [12, 9, 7],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#accent", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "Right edge — back half.",
+      "from": [11, 7, 9], "to": [12, 9, 11],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west":  { "texture": "#accent", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "NW corner post — 1x4x1 column at x=4..5, z=4..5. Extends 1 voxel above and below the ring (y=6..10) so the silhouette reads as 'ring on four stilts'. Inner faces (south, east) glow accent.",
+      "from": [4, 6, 4], "to": [5, 10, 5],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west": { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "NE corner post — inner faces are south + west.",
+      "from": [11, 6, 4], "to": [12, 10, 5],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#core" }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#core" }, "west": { "texture": "#accent", "emissivity": 15 }
+      }
+    },
+    {
+      "__comment": "SW corner post — inner faces are north + east.",
+      "from": [4, 6, 11], "to": [5, 10, 12],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#core" },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west": { "texture": "#core" }
+      }
+    },
+    {
+      "__comment": "SE corner post — inner faces are north + west.",
+      "from": [11, 6, 11], "to": [12, 10, 12],
+      "faces": {
+        "down":  { "texture": "#core" }, "up":    { "texture": "#core" },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#core" },
+        "east":  { "texture": "#core" }, "west": { "texture": "#accent", "emissivity": 15 }
       }
     }
   ]

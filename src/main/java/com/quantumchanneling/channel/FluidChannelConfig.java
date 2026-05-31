@@ -21,6 +21,9 @@ public class FluidChannelConfig {
 
     public int maskVersion() { return maskVersion; }
 
+    /** See {@link ItemChannelConfig#bumpRoutingVersion()}. */
+    public void bumpRoutingVersion() { maskVersion++; }
+
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
         tag.putInt("BatchSize", batchSize);

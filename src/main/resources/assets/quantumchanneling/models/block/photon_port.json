@@ -1,0 +1,43 @@
+{
+  "__comment": "Small accent ring at one face — only added by the blockstate when CONN_<that face> is true. Replaces the old solid arm: the BER draws the beam, this just frames the port the beam passes through. Default orientation points UP.",
+  "parent": "block/block",
+  "textures": {
+    "ring":     "quantumchanneling:block/photon_core_dark",
+    "particle": "quantumchanneling:block/photon_core_dark"
+  },
+  "elements": [
+    {
+      "__comment": "Four short edge segments arranged as a square ring around the face's center. Each is 1 pixel thick; together they form a hollow port the beam shines through. Solid edges + emissive accent rim make it read as 'machined port' instead of 'arm'.",
+      "from": [6, 15, 6], "to": [10, 16, 7],
+      "faces": {
+        "down":  { "texture": "#ring" }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#accent", "emissivity": 15 }, "south": { "texture": "#ring" },
+        "east":  { "texture": "#ring" }, "west":  { "texture": "#ring" }
+      }
+    },
+    {
+      "from": [6, 15, 9], "to": [10, 16, 10],
+      "faces": {
+        "down":  { "texture": "#ring" }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#ring" }, "south": { "texture": "#accent", "emissivity": 15 },
+        "east":  { "texture": "#ring" }, "west":  { "texture": "#ring" }
+      }
+    },
+    {
+      "from": [6, 15, 7], "to": [7, 16, 9],
+      "faces": {
+        "down":  { "texture": "#ring" }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#ring" }, "south": { "texture": "#ring" },
+        "east":  { "texture": "#ring" }, "west":  { "texture": "#accent", "emissivity": 15 }
+      }
+    },
+    {
+      "from": [9, 15, 7], "to": [10, 16, 9],
+      "faces": {
+        "down":  { "texture": "#ring" }, "up":    { "texture": "#accent", "emissivity": 15 },
+        "north": { "texture": "#ring" }, "south": { "texture": "#ring" },
+        "east":  { "texture": "#accent", "emissivity": 15 }, "west":  { "texture": "#ring" }
+      }
+    }
+  ]
+}

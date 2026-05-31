@@ -30,6 +30,13 @@ public class ItemChannelConfig {
 
     public int maskVersion() { return maskVersion; }
 
+    /**
+     * External bump for the routing-decision version. Receivers call this when their items-enabled
+     * flag or subchannel subscriptions change, so every emitter on the channel notices on its next
+     * tick and wipes its decision cache instead of serving stale REJECT/ROUTE verdicts.
+     */
+    public void bumpRoutingVersion() { maskVersion++; }
+
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
         tag.putInt("BatchSize", batchSize);

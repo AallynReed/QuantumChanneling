@@ -144,6 +144,38 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     private int cachedFluidChannelMaskVersion = -1;
     private int cachedFluidLocalEditCount = -1;
 
+    /**
+     * Per-receiver reject cooldown — when a push attempt delivered nothing (destination full),
+     * skip that receiver for {@link #REJECT_COOLDOWN_TICKS} ticks so we don't burn cycles re-trying
+     * a known-full target every routing pass. Cleared on any successful push to the same receiver
+     * and naturally flushed by the channel mask-version bump. One map per resource kind keeps the
+     * three pipelines independent (a fluid-full receiver isn't necessarily item-full).
+     */
+    private final java.util.HashMap<Long, Long> itemRejectUntil  = new java.util.HashMap<>();
+    private final java.util.HashMap<Long, Long> fluidRejectUntil = new java.util.HashMap<>();
+    private final java.util.HashMap<Long, Long> gasRejectUntil   = new java.util.HashMap<>();
+    private static final int REJECT_COOLDOWN_TICKS = 20;
+    private static final int REJECT_MAP_PRUNE_AT = 64;
+
+    /**
+     * Adaptive tick-rate state — once per resource. The pipeline scans the adjacent inventories /
+     * tanks every 2 ticks normally, but drops to once every 20 ticks after a "dry" scan finds
+     * nothing routable. The next time anything actually moves, it accelerates back to every 2
+     * ticks. Channel-level mask-version bumps (receiver toggles, subscription changes, etc.) wake
+     * the slow timer immediately so changes don't have to wait out the remaining slow interval.
+     */
+    private int itemsTickPhase = 0;
+    private boolean itemsSlowMode = false;
+    private int lastSeenItemMaskVersion  = -1;
+    private int fluidsTickPhase = 0;
+    private boolean fluidsSlowMode = false;
+    private int lastSeenFluidMaskVersion = -1;
+    private int gasTickPhase = 0;
+    private boolean gasSlowMode = false;
+    private int lastSeenGasMaskVersion   = -1;
+    private static final int TICK_INTERVAL_FAST = 2;
+    private static final int TICK_INTERVAL_SLOW = 20;
+
     public ItemFilter voidFilter() { return voidFilter; }
     public FluidFilter fluidVoidFilter() { return fluidVoidFilter; }
     public GasFilter gasVoidFilter() { return gasVoidFilter; }
@@ -341,6 +373,130 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         bumpLocalEdit(); return true;
     }
 
+    /* Tag-entry parallels — same shape, separate storage on the underlying filter. */
+    public boolean addItemSubchannelTagEntry(UUID id, ResourceLocation tagId) {
+        ItemSubchannel s = itemSubchannels.get(id);
+        if (s == null || !s.filter().addTag(tagId)) return false;
+        bumpLocalEdit(); return true;
+    }
+    public boolean removeItemSubchannelTagEntry(UUID id, ResourceLocation tagId) {
+        ItemSubchannel s = itemSubchannels.get(id);
+        if (s == null || !s.filter().removeTag(tagId)) return false;
+        bumpLocalEdit(); return true;
+    }
+    public boolean addFluidSubchannelTagEntry(UUID id, ResourceLocation tagId) {
+        FluidSubchannel s = fluidSubchannels.get(id);
+        if (s == null || !s.filter().addTag(tagId)) return false;
+        bumpLocalEdit(); return true;
+    }
+    public boolean removeFluidSubchannelTagEntry(UUID id, ResourceLocation tagId) {
+        FluidSubchannel s = fluidSubchannels.get(id);
+        if (s == null || !s.filter().removeTag(tagId)) return false;
+        bumpLocalEdit(); return true;
+    }
+    public boolean addGasSubchannelTagEntry(UUID id, ResourceLocation tagId) {
+        GasSubchannel s = gasSubchannels.get(id);
+        if (s == null || !s.filter().addTag(tagId)) return false;
+        bumpLocalEdit(); return true;
+    }
+    public boolean removeGasSubchannelTagEntry(UUID id, ResourceLocation tagId) {
+        GasSubchannel s = gasSubchannels.get(id);
+        if (s == null || !s.filter().removeTag(tagId)) return false;
+        bumpLocalEdit(); return true;
+    }
+
+    /**
+     * Copies every subchannel hosted on {@code source} into this emitter, generating fresh UUIDs so
+     * receivers subscribed to the source keep pointing at the source — the copy is a structural
+     * template, not a join. Per-emitter caps still apply: copies stop when this emitter would
+     * exceed its limit for the kind. Returns the total number of subchannels actually created.
+     */
+    public int cloneSubchannelsFrom(PhotonEmitterBlockEntity source) {
+        if (source == null) return 0;
+        int n = 0;
+        // Items
+        for (ItemSubchannel src : source.itemSubchannels.values()) {
+            if (itemSubchannels.size() >= com.quantumchanneling.ServerConfig.itemsMaxSubsPerEmitter) break;
+            String name = uniqueItemName(src.name());
+            if (name.isEmpty()) continue;
+            ItemFilter f = new ItemFilter(src.filter().isWhitelist());
+            f.copyFrom(src.filter());
+            UUID id = UUID.randomUUID();
+            ItemSubchannel copy = new ItemSubchannel(id, name, f, src.color());
+            itemSubchannels.put(id, copy);
+            n++;
+        }
+        // Fluids
+        for (FluidSubchannel src : source.fluidSubchannels.values()) {
+            if (fluidSubchannels.size() >= com.quantumchanneling.ServerConfig.fluidsMaxSubsPerEmitter) break;
+            String name = uniqueFluidName(src.name());
+            if (name.isEmpty()) continue;
+            FluidFilter f = new FluidFilter(src.filter().isWhitelist());
+            f.copyFrom(src.filter());
+            UUID id = UUID.randomUUID();
+            fluidSubchannels.put(id, new FluidSubchannel(id, name, f, src.color()));
+            n++;
+        }
+        // Gas
+        for (GasSubchannel src : source.gasSubchannels.values()) {
+            if (gasSubchannels.size() >= com.quantumchanneling.ServerConfig.gasesMaxSubsPerEmitter) break;
+            String name = uniqueGasName(src.name());
+            if (name.isEmpty()) continue;
+            GasFilter f = new GasFilter(src.filter().isWhitelist());
+            f.copyFrom(src.filter());
+            UUID id = UUID.randomUUID();
+            gasSubchannels.put(id, new GasSubchannel(id, name, f, src.color()));
+            n++;
+        }
+        if (n > 0) bumpLocalEdit();
+        return n;
+    }
+
+    /** Disambiguates a copied name against existing entries by suffixing {@code (2)}, {@code (3)}, etc. */
+    private String uniqueItemName(String base) { return uniqueName(base, n -> {
+        for (ItemSubchannel s : itemSubchannels.values()) if (s.name().equalsIgnoreCase(n)) return true;
+        return false;
+    }); }
+    private String uniqueFluidName(String base) { return uniqueName(base, n -> {
+        for (FluidSubchannel s : fluidSubchannels.values()) if (s.name().equalsIgnoreCase(n)) return true;
+        return false;
+    }); }
+    private String uniqueGasName(String base) { return uniqueName(base, n -> {
+        for (GasSubchannel s : gasSubchannels.values()) if (s.name().equalsIgnoreCase(n)) return true;
+        return false;
+    }); }
+
+    private static String uniqueName(String base, java.util.function.Predicate<String> taken) {
+        if (base == null) return "";
+        String b = base.trim();
+        if (b.isEmpty()) return "";
+        if (!taken.test(b)) return b;
+        for (int i = 2; i < 1000; i++) {
+            String candidate = b + " (" + i + ")";
+            if (candidate.length() > ItemSubchannel.NAME_MAX) {
+                candidate = b.substring(0, Math.max(0, ItemSubchannel.NAME_MAX - 6)) + " (" + i + ")";
+            }
+            if (!taken.test(candidate)) return candidate;
+        }
+        return "";
+    }
+
+    public boolean setItemSubchannelColor(UUID id, int rgb) {
+        ItemSubchannel s = itemSubchannels.get(id);
+        if (s == null || s.color() == (rgb & 0xFFFFFF)) return false;
+        s.setColor(rgb); bumpLocalEdit(); return true;
+    }
+    public boolean setFluidSubchannelColor(UUID id, int rgb) {
+        FluidSubchannel s = fluidSubchannels.get(id);
+        if (s == null || s.color() == (rgb & 0xFFFFFF)) return false;
+        s.setColor(rgb); bumpLocalEdit(); return true;
+    }
+    public boolean setGasSubchannelColor(UUID id, int rgb) {
+        GasSubchannel s = gasSubchannels.get(id);
+        if (s == null || s.color() == (rgb & 0xFFFFFF)) return false;
+        s.setColor(rgb); bumpLocalEdit(); return true;
+    }
+
     /** Moves a subchannel up ({@code dir<0}) or down ({@code dir>0}) in iteration order. */
     public boolean moveItemSubchannel(UUID id, int dir)  { return reorder(itemSubchannels, id, dir); }
     public boolean moveFluidSubchannel(UUID id, int dir) { return reorder(fluidSubchannels, id, dir); }
@@ -361,6 +517,33 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         map.putAll(rebuilt);
         bumpLocalEdit();
         return true;
+    }
+
+    /* ---- per-receiver reject cooldown ---- */
+    public boolean isItemReceiverCooledDown(long packedPos, long now)  { return isCooledDown(itemRejectUntil,  packedPos, now); }
+    public boolean isFluidReceiverCooledDown(long packedPos, long now) { return isCooledDown(fluidRejectUntil, packedPos, now); }
+    public boolean isGasReceiverCooledDown(long packedPos, long now)   { return isCooledDown(gasRejectUntil,   packedPos, now); }
+
+    public void markItemReceiverRejected(long packedPos, long now)  { mark(itemRejectUntil,  packedPos, now); }
+    public void markFluidReceiverRejected(long packedPos, long now) { mark(fluidRejectUntil, packedPos, now); }
+    public void markGasReceiverRejected(long packedPos, long now)   { mark(gasRejectUntil,   packedPos, now); }
+
+    public void clearItemReceiverCooldown(long packedPos)  { itemRejectUntil.remove(packedPos); }
+    public void clearFluidReceiverCooldown(long packedPos) { fluidRejectUntil.remove(packedPos); }
+    public void clearGasReceiverCooldown(long packedPos)   { gasRejectUntil.remove(packedPos); }
+
+    private static boolean isCooledDown(java.util.HashMap<Long, Long> map, long key, long now) {
+        Long until = map.get(key);
+        if (until == null) return false;
+        if (until <= now) { map.remove(key); return false; }
+        return true;
+    }
+
+    private static void mark(java.util.HashMap<Long, Long> map, long key, long now) {
+        map.put(key, now + REJECT_COOLDOWN_TICKS);
+        // Prune any straggler expired entries so the map doesn't grow without bound on emitters
+        // routing through a lot of intermittent receivers.
+        if (map.size() > REJECT_MAP_PRUNE_AT) map.values().removeIf(v -> v <= now);
     }
 
     /** Cache-respecting wrapper around {@link ItemTransitHelper#evaluate}. */
@@ -412,7 +595,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         public @NotNull ItemStack insertItem(int slot, @NotNull ItemStack stack, boolean simulate) {
             if (stack.isEmpty()) return stack;
             if (!com.quantumchanneling.ServerConfig.itemsRoutingEnabled) return stack;
-            if (!isItemsEnabled()) return stack;
+            if (!isResourceGate(isItemsEnabled())) return stack;
             if (!(level instanceof ServerLevel sl)) return stack;
             UUID channelId = getChannelId();
             if (channelId == null) return stack;
@@ -439,7 +622,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         public int fill(FluidStack resource, FluidAction action) {
             if (resource == null || resource.isEmpty()) return 0;
             if (!com.quantumchanneling.ServerConfig.fluidsRoutingEnabled) return 0;
-            if (!isFluidsEnabled()) return 0;
+            if (!isResourceGate(isFluidsEnabled())) return 0;
             if (!(level instanceof ServerLevel sl)) return 0;
             UUID channelId = getChannelId();
             if (channelId == null) return 0;
@@ -618,6 +801,13 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         recordSample(lastTickThroughput);
         forwardedThisTick = 0;
 
+        // Roll the per-subchannel throughput windows. Cheap — one int+ and a compare per
+        // subchannel. Done unconditionally so the rolling window keeps moving even when nothing
+        // routed this tick (otherwise idle subchannels would never roll over).
+        for (ItemSubchannel s : itemSubchannels.values()) s.tickRoutingWindow();
+        for (FluidSubchannel s : fluidSubchannels.values()) s.tickRoutingWindow();
+        for (GasSubchannel s : gasSubchannels.values()) s.tickRoutingWindow();
+
         // Re-scan adjacency every second, but stagger across emitters by position hash so all of
         // them don't refresh on the same tick. neighborChanged only fires on block-state changes,
         // and a neighbor BE can acquire/lose its IEnergyStorage cap silently (first-tick init,
@@ -663,20 +853,36 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
      * items, and pushes them straight to a subscribed receiver's adjacent inventory.
      */
     private void tickItemsMode(ServerLevel level) {
-        if ((level.getGameTime() & 1L) != 0L) return;
-        // Cheap gates first — server-side master switch, then per-device opt-in, then
-        // owns-anything-routable. Each is a static field read or a single int comparison.
+        // Cheap gates first — server-side master switch, then per-device opt-in (gated by the
+        // redstone mode), then owns-anything-routable.
         if (!com.quantumchanneling.ServerConfig.itemsRoutingEnabled) return;
-        if (!isItemsEnabled() || itemSubchannelCount() == 0) return;
+        if (!isResourceGate(isItemsEnabled()) || itemSubchannelCount() == 0) return;
         UUID channelId = getChannelId();
         if (channelId == null) return;
         QuantumChannel net = ChannelData.get(level.getServer()).getChannel(channelId);
         if (net == null) return;
-        // Clamp the channel-set batch to the server-enforced ceiling. Lower the cap mid-game and
-        // every emitter picks it up on the next tick — no migration needed.
+
+        // Wake from slow mode whenever something on the channel changes routing decisions
+        // (receiver subscribed/unsubscribed, items-enabled toggled, batch size edited).
+        int channelVersion = net.itemConfig().maskVersion();
+        if (channelVersion != lastSeenItemMaskVersion) {
+            lastSeenItemMaskVersion = channelVersion;
+            itemsSlowMode = false;
+            itemsTickPhase = 0;
+        }
+
+        int interval = itemsSlowMode ? TICK_INTERVAL_SLOW : TICK_INTERVAL_FAST;
+        if (++itemsTickPhase < interval) return;
+        itemsTickPhase = 0;
+
         int batch = Math.min(net.itemConfig().batchSize(), com.quantumchanneling.ServerConfig.itemsMaxBatch);
         int moved = ItemTransitHelper.pullFromAdjacentAndRoute(level, this, net, batch);
-        if (moved > 0) forwardedThisTick = moved;
+        if (moved > 0) {
+            forwardedThisTick = moved;
+            itemsSlowMode = false;   // activity → stay fast
+        } else {
+            itemsSlowMode = true;    // dry scan → coast for ~1 s before retrying
+        }
     }
 
     /**
@@ -686,31 +892,56 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
      */
     private void tickGasAndHeat(ServerLevel level) {
         // Caller already gates on Compat.mekanismLoaded() — this method should never run otherwise.
-        if ((level.getGameTime() & 1L) != 0L) return;
         if (!com.quantumchanneling.ServerConfig.gasesRoutingEnabled) return;
-        if (!isGasEnabled() || gasSubchannelCount() == 0) return;
+        if (!isResourceGate(isGasEnabled()) || gasSubchannelCount() == 0) return;
         UUID channelId = getChannelId();
         if (channelId == null) return;
         QuantumChannel net = ChannelData.get(level.getServer()).getChannel(channelId);
         if (net == null) return;
-        com.quantumchanneling.compat.mekanism.GasIntegration.pullAndRoute(level, this, net);
+
+        int channelVersion = net.gasConfig().maskVersion();
+        if (channelVersion != lastSeenGasMaskVersion) {
+            lastSeenGasMaskVersion = channelVersion;
+            gasSlowMode = false;
+            gasTickPhase = 0;
+        }
+
+        int interval = gasSlowMode ? TICK_INTERVAL_SLOW : TICK_INTERVAL_FAST;
+        if (++gasTickPhase < interval) return;
+        gasTickPhase = 0;
+
+        int batch = Math.min(net.gasConfig().batchSize(), com.quantumchanneling.ServerConfig.gasesMaxBatch);
+        boolean routed = com.quantumchanneling.compat.mekanism.GasIntegration.pullAndRoute(level, this, net, batch);
+        gasSlowMode = !routed;
         // Heat routing is intentionally disabled — the HEAT side-tab is hidden in the UI and the
         // thermal-wire model needs more design work. HeatIntegration + HeatChannelConfig stay
         // intact so existing channels round-trip cleanly; we just never invoke the tick.
         // The matching ServerConfig.heatRoutingEnabled flag is there for when the pipeline ships.
     }
 
-    /** Fluid analog of {@link #tickItemsMode}. mB instead of stacks; same every-other-tick cadence. */
+    /** Fluid analog of {@link #tickItemsMode}. mB instead of stacks; same adaptive cadence. */
     private void tickFluidsMode(ServerLevel level) {
-        if ((level.getGameTime() & 1L) != 0L) return;
         if (!com.quantumchanneling.ServerConfig.fluidsRoutingEnabled) return;
-        if (!isFluidsEnabled() || fluidSubchannelCount() == 0) return;
+        if (!isResourceGate(isFluidsEnabled()) || fluidSubchannelCount() == 0) return;
         UUID channelId = getChannelId();
         if (channelId == null) return;
         QuantumChannel net = ChannelData.get(level.getServer()).getChannel(channelId);
         if (net == null) return;
+
+        int channelVersion = net.fluidConfig().maskVersion();
+        if (channelVersion != lastSeenFluidMaskVersion) {
+            lastSeenFluidMaskVersion = channelVersion;
+            fluidsSlowMode = false;
+            fluidsTickPhase = 0;
+        }
+
+        int interval = fluidsSlowMode ? TICK_INTERVAL_SLOW : TICK_INTERVAL_FAST;
+        if (++fluidsTickPhase < interval) return;
+        fluidsTickPhase = 0;
+
         int batch = Math.min(net.fluidConfig().batchSize(), com.quantumchanneling.ServerConfig.fluidsMaxBatch);
-        FluidTransitHelper.pullFromAdjacentAndRoute(level, this, net, batch);
+        int moved = FluidTransitHelper.pullFromAdjacentAndRoute(level, this, net, batch);
+        fluidsSlowMode = (moved <= 0);
     }
 
     @Override
