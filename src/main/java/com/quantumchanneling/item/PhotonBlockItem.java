@@ -1,27 +1,20 @@
 package com.quantumchanneling.item;
 
 import com.quantumchanneling.block.PhotonStorageBlock;
+import com.quantumchanneling.client.ClientServerConfig;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
-import net.minecraft.world.level.Level;
+import net.minecraft.world.item.component.TooltipDisplay;
 import net.minecraft.world.level.block.Block;
-import org.jetbrains.annotations.Nullable;
 
-import java.util.List;
+import java.util.function.Consumer;
 
 /**
- * {@link BlockItem} variant that attaches a hover-tooltip in two parts:
- * a translated description (its lang key is {@code <baseKey>.description}) and, for storage tiers,
- * a dynamic capacity line read from {@link com.quantumchanneling.client.ClientServerConfig#storageCapacities}.
- *
- * <p>The emitter and receiver items use {@link PhotonShaderBlockItem} instead, which adds the
- * GLSL custom renderer. That separation matters because {@code Item.initializeClient} runs from
- * the {@code Item} super-constructor — {@code BlockItem.block} isn't assigned yet at that point,
- * so any decision based on the wrapped block would see {@code null}. Encoding the choice in the
- * subclass type bypasses that problem entirely.
+ * {@link BlockItem} with a translated description line and, for storage tiers, a capacity line
+ * read from {@link ClientServerConfig#storageCapacities} (the server's values once synced).
  */
 public class PhotonBlockItem extends BlockItem {
     private final String descriptionKey;
@@ -32,21 +25,21 @@ public class PhotonBlockItem extends BlockItem {
     }
 
     @Override
-    public void appendHoverText(ItemStack stack, @Nullable Level level, List<Component> tooltip, TooltipFlag flag) {
-        super.appendHoverText(stack, level, tooltip, flag);
-        tooltip.add(Component.translatable(descriptionKey).withStyle(ChatFormatting.GRAY));
+    @SuppressWarnings("deprecation")
+    public void appendHoverText(ItemStack stack, TooltipContext context, TooltipDisplay display,
+                                Consumer<Component> tooltip, TooltipFlag flag) {
+        tooltip.accept(Component.translatable(descriptionKey).withStyle(ChatFormatting.GRAY));
         if (getBlock() instanceof PhotonStorageBlock psb) {
             int tier = psb.getTier();
-            long[] caps = com.quantumchanneling.client.ClientServerConfig.storageCapacities;
-            long cap = (caps != null && tier - 1 < caps.length) ? caps[tier - 1] : 0L;
-            String formatted = formatFE(cap);
-            tooltip.add(Component.translatable("tooltip.quantumchanneling.storage.capacity", formatted)
+            long[] caps = ClientServerConfig.storageCapacities;
+            long cap = tier - 1 < caps.length ? caps[tier - 1] : 0L;
+            tooltip.accept(Component.translatable("tooltip.quantumchanneling.storage.capacity", formatFE(cap))
                     .withStyle(ChatFormatting.AQUA));
         }
     }
 
     private static String formatFE(long fe) {
-        if (Math.abs(fe) < 1_000L) return Long.toString(fe) + " FE";
+        if (Math.abs(fe) < 1_000L) return fe + " FE";
         String[] suffixes = { "K", "M", "G", "T", "P", "E" };
         int idx = 0;
         double v = fe;

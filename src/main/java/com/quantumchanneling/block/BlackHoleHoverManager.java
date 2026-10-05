@@ -7,11 +7,10 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.phys.Vec3;
-import net.minecraftforge.event.TickEvent;
-import net.minecraftforge.event.entity.EntityJoinLevelEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.server.ServerLifecycleHooks;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.entity.EntityJoinLevelEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 
 import java.util.Iterator;
 import java.util.UUID;
@@ -29,7 +28,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *       at which gravity should be restored.</li>
  *   <li>A loose registry of pending entries — keyed by (dimension, UUID, unlock tick) — is held
  *       in memory for the common case where the player stays in the area through the burst.</li>
- *   <li>A {@link TickEvent.ServerTickEvent} sweep each tick checks every pending entry and
+ *   <li>A {@link ServerTickEvent.Post} sweep each tick checks every pending entry and
  *       restores gravity once the unlock tick passes.</li>
  *   <li>An {@link EntityJoinLevelEvent} hook re-registers entities that had a non-empty
  *       {@code qc_hover_until} tag when they were saved — so a player who walks away mid-implosion
@@ -41,7 +40,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * <p>The CopyOnWriteArrayList shields against concurrent modification when items thaw mid-iteration
  * (the join handler can add new entries while the tick sweep iterates).
  */
-@Mod.EventBusSubscriber(modid = QuantumChanneling.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
+@EventBusSubscriber(modid = QuantumChanneling.MODID)
 public final class BlackHoleHoverManager {
     private BlackHoleHoverManager() {}
 
@@ -60,18 +59,16 @@ public final class BlackHoleHoverManager {
     public static void freeze(ServerLevel level, ItemEntity ie, long unlockTick) {
         ie.setNoGravity(true);
         ie.setDeltaMovement(Vec3.ZERO);
-        ie.hasImpulse = true;
+        ie.needsSync = true;
         // Persist on the entity so chunk save/load preserves the hover.
         ie.getPersistentData().putLong(TAG_UNLOCK_TICK, unlockTick);
         PENDING.add(new Entry(level.dimension(), ie.getUUID(), unlockTick));
     }
 
     @SubscribeEvent
-    public static void onServerTick(TickEvent.ServerTickEvent event) {
-        if (event.phase != TickEvent.Phase.END) return;
+    public static void onServerTick(ServerTickEvent.Post event) {
         if (PENDING.isEmpty()) return;
-        var server = ServerLifecycleHooks.getCurrentServer();
-        if (server == null) return;
+        var server = event.getServer();
 
         Iterator<Entry> it = PENDING.iterator();
         // Use a separate "to remove" list because CopyOnWriteArrayList's iterator doesn't support
@@ -100,10 +97,10 @@ public final class BlackHoleHoverManager {
      *  list so the next tick check can thaw them at the appropriate time. */
     @SubscribeEvent
     public static void onEntityJoin(EntityJoinLevelEvent event) {
-        if (event.getLevel().isClientSide) return;
+        if (event.getLevel().isClientSide()) return;
         if (!(event.getEntity() instanceof ItemEntity ie)) return;
         if (!(event.getLevel() instanceof ServerLevel sl)) return;
-        long unlockTick = ie.getPersistentData().getLong(TAG_UNLOCK_TICK);
+        long unlockTick = ie.getPersistentData().getLongOr(TAG_UNLOCK_TICK, 0L);
         if (unlockTick <= 0) return;
         // Re-apply the freeze. If unlockTick is already in the past, the next ServerTickEvent
         // sweep will thaw it on its very first iteration.

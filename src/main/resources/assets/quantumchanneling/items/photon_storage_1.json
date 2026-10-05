@@ -1,0 +1,19 @@
+{
+  "model": {
+    "type": "minecraft:composite",
+    "models": [
+      {
+        "type": "minecraft:model",
+        "model": "quantumchanneling:item/photon_storage_1"
+      },
+      {
+        "type": "minecraft:special",
+        "base": "quantumchanneling:item/photon_storage_1",
+        "model": {
+          "type": "quantumchanneling:photon_effect",
+          "effect": "storage_1"
+        }
+      }
+    ]
+  }
+}

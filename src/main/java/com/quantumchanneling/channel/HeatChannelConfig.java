@@ -17,7 +17,7 @@ public class HeatChannelConfig {
     }
     public static HeatChannelConfig load(CompoundTag tag) {
         HeatChannelConfig c = new HeatChannelConfig();
-        c.enabled = tag.getBoolean("Enabled");
+        c.enabled = tag.getBooleanOr("Enabled", false);
         return c;
     }
     public void write(FriendlyByteBuf buf) { buf.writeBoolean(enabled); }

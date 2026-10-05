@@ -1,17 +1,27 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.QuantumChanneling;
+import com.quantumchanneling.api.IQuantumSubchannelView.Kind;
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.network.NetworkEvent;
+import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.UUID;
-import java.util.function.Supplier;
 
 /** Client → server: reorder a gas subchannel on {@code emitterPos} in routing-priority order. */
-public record MoveDeviceGasSubchannelPacket(BlockPos emitterPos, UUID subId, int direction) {
+public record MoveDeviceGasSubchannelPacket(BlockPos emitterPos, UUID subId, int direction) implements CustomPacketPayload {
+    public static final Type<MoveDeviceGasSubchannelPacket> TYPE = new Type<>(QuantumChanneling.id("move_device_gas_subchannel"));
+    public static final StreamCodec<FriendlyByteBuf, MoveDeviceGasSubchannelPacket> STREAM_CODEC =
+            StreamCodec.ofMember(MoveDeviceGasSubchannelPacket::encode, MoveDeviceGasSubchannelPacket::decode);
+
+    @Override
+    public Type<MoveDeviceGasSubchannelPacket> type() { return TYPE; }
+
     public static void encode(MoveDeviceGasSubchannelPacket p, FriendlyByteBuf b) {
         b.writeBlockPos(p.emitterPos);
         b.writeUUID(p.subId);
@@ -20,17 +30,12 @@ public record MoveDeviceGasSubchannelPacket(BlockPos emitterPos, UUID subId, int
     public static MoveDeviceGasSubchannelPacket decode(FriendlyByteBuf b) {
         return new MoveDeviceGasSubchannelPacket(b.readBlockPos(), b.readUUID(), b.readVarInt());
     }
-    public static void handle(MoveDeviceGasSubchannelPacket p, Supplier<NetworkEvent.Context> sup) {
-        NetworkEvent.Context ctx = sup.get();
-        ctx.enqueueWork(() -> {
-            ServerPlayer player = ctx.getSender();
-            if (player == null) return;
-            ChannelBoundBlockEntity dev = PacketUtil.manageableDevice(player, p.emitterPos);
-            if (!(dev instanceof PhotonEmitterBlockEntity em)) return;
-            if (em.moveGasSubchannel(p.subId, p.direction)) {
-                CreateChannelPacket.sendListBackTo(player);
-            }
-        });
-        ctx.setPacketHandled(true);
+    public static void handle(MoveDeviceGasSubchannelPacket p, IPayloadContext ctx) {
+        if (!(ctx.player() instanceof ServerPlayer player)) return;
+        ChannelBoundBlockEntity dev = PacketUtil.manageableDevice(player, p.emitterPos);
+        if (!(dev instanceof PhotonEmitterBlockEntity em)) return;
+        if (em.moveSubchannel(Kind.GAS, p.subId, p.direction)) {
+            CreateChannelPacket.sendListBackTo(player);
+        }
     }
 }

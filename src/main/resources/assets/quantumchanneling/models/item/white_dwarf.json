@@ -1,6 +1,7 @@
 {
-  "__comment": "builtin/entity triggers Forge's BEWLR path → PhotonItemRenderer draws the white_dwarf sun shader with NO block model. Display transforms keep the star centered in every context.",
-  "parent": "builtin/entity",
+  "textures": {
+    "particle": "quantumchanneling:item/white_dwarf"
+  },
   "gui_light": "side",
   "display": {
     "gui": {

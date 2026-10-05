@@ -33,10 +33,8 @@ public class FluidChannelConfig {
 
     public static FluidChannelConfig load(CompoundTag tag) {
         FluidChannelConfig c = new FluidChannelConfig();
-        if (tag.contains("BatchSize")) {
-            c.batchSize = Math.max(MIN_BATCH, Math.min(MAX_BATCH, tag.getInt("BatchSize")));
-        }
-        if (tag.contains("MaskVersion")) c.maskVersion = tag.getInt("MaskVersion");
+        c.batchSize = Math.clamp(tag.getIntOr("BatchSize", c.batchSize), MIN_BATCH, MAX_BATCH);
+        c.maskVersion = tag.getIntOr("MaskVersion", 0);
         return c;
     }
 

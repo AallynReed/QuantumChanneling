@@ -1,6 +1,5 @@
 {
-  "__comment": "See photon_emitter.json — same pattern. builtin/entity drives the BEWLR path. gui_light=side keeps the 3D shading in the inventory slot.",
-  "parent": "builtin/entity",
+  "parent": "quantumchanneling:block/photon_receiver_core",
   "gui_light": "side",
   "display": {
     "gui": {
@@ -31,12 +30,12 @@
     "firstperson_righthand": {
       "rotation": [0, 45, 0],
       "translation": [0, 0, 0],
-      "scale": [0.40, 0.40, 0.40]
+      "scale": [0.4, 0.4, 0.4]
     },
     "firstperson_lefthand": {
       "rotation": [0, 225, 0],
       "translation": [0, 0, 0],
-      "scale": [0.40, 0.40, 0.40]
+      "scale": [0.4, 0.4, 0.4]
     }
   }
 }

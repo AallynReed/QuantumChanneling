@@ -1,0 +1,10 @@
+{
+  "model": {
+    "type": "minecraft:special",
+    "base": "quantumchanneling:item/uncontained_black_hole",
+    "model": {
+      "type": "quantumchanneling:photon_effect",
+      "effect": "black_hole"
+    }
+  }
+}

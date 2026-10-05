@@ -1,4 +1,7 @@
-#version 150
+#version 330
+
+#moj_import <minecraft:dynamictransforms.glsl>
+#moj_import <minecraft:globals.glsl>
 
 // Gyroscope ring shader. One annular band rendered per quad. The BER spawns three of these per
 // manager — each at its own 3D orientation — and rotates the orientations over time, producing
@@ -13,9 +16,6 @@
 
 in vec4 vertexColor;
 in vec2 texCoord;
-
-uniform vec4 ColorModulator;
-uniform float GameTime;
 
 out vec4 fragColor;
 

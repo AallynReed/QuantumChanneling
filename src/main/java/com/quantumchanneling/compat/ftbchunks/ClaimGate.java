@@ -4,6 +4,7 @@ import com.quantumchanneling.client.Compat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.permissions.Permissions;
 import net.minecraft.world.level.ChunkPos;
 
 import java.lang.reflect.Constructor;
@@ -36,7 +37,7 @@ public final class ClaimGate {
     public static boolean canEditAt(ServerPlayer player, ServerLevel level, BlockPos pos) {
         if (player == null) return false;
         if (!Compat.ftbChunksLoaded()) return true;   // mod absent
-        if (player.hasPermissions(2)) return true;    // OP bypass
+        if (player.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER)) return true;    // OP bypass
 
         prepareReflectionIfNeeded();
         if (apiMethod == null) return true;            // surface changed → permissive

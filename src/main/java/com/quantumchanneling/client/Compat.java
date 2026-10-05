@@ -1,11 +1,11 @@
 package com.quantumchanneling.client;
 
-import net.minecraftforge.fml.ModList;
+import net.neoforged.fml.ModList;
 
 /**
  * Tiny runtime feature-detection helper. ModList lookups are cheap but happen on hot paths
  * (every emitter tick checks {@link #mekanismLoaded()}), so the results are cached on first
- * access. The set of loaded mods doesn't change after FMLCommonSetupEvent, so caching is safe.
+ * access. The set of loaded mods never changes after loading, so caching is safe.
  */
 public final class Compat {
     private Compat() {}
@@ -21,18 +21,14 @@ public final class Compat {
         return v;
     }
 
-    /** True when Mekanism is loaded — provider for both the gas (IGasHandler) and heat (IHeatHandler) APIs. */
+    /** True when Mekanism is loaded — the provider of the chemicals routed as "gas". */
     public static boolean mekanismLoaded() {
         Boolean v = mekanism;
         if (v == null) { v = ModList.get().isLoaded("mekanism"); mekanism = v; }
         return v;
     }
 
-    /**
-     * True when any mod that provides a gas capability is loaded. Currently only Mekanism does in
-     * the 1.20.1 modding scene; kept as a separate predicate so adding alt providers later (e.g.
-     * Pneumaticcraft) is a one-line OR.
-     */
+    /** True when any mod that provides a gas capability is loaded. Only Mekanism today. */
     public static boolean gasProviderLoaded() {
         return mekanismLoaded();
     }

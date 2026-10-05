@@ -1,14 +1,23 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.QuantumChanneling;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.network.NetworkEvent;
+import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.UUID;
-import java.util.function.Supplier;
 
 /** Client → server: admin blocks or unblocks a player's wireless charging on a channel. */
-public record SetChannelChargeBlockedPacket(UUID channelId, UUID targetPlayerId, boolean blocked) {
+public record SetChannelChargeBlockedPacket(UUID channelId, UUID targetPlayerId, boolean blocked) implements CustomPacketPayload {
+    public static final Type<SetChannelChargeBlockedPacket> TYPE = new Type<>(QuantumChanneling.id("set_channel_charge_blocked"));
+    public static final StreamCodec<FriendlyByteBuf, SetChannelChargeBlockedPacket> STREAM_CODEC =
+            StreamCodec.ofMember(SetChannelChargeBlockedPacket::encode, SetChannelChargeBlockedPacket::decode);
+
+    @Override
+    public Type<SetChannelChargeBlockedPacket> type() { return TYPE; }
+
     public static void encode(SetChannelChargeBlockedPacket p, FriendlyByteBuf b) {
         b.writeUUID(p.channelId);
         b.writeUUID(p.targetPlayerId);
@@ -17,18 +26,13 @@ public record SetChannelChargeBlockedPacket(UUID channelId, UUID targetPlayerId,
     public static SetChannelChargeBlockedPacket decode(FriendlyByteBuf b) {
         return new SetChannelChargeBlockedPacket(b.readUUID(), b.readUUID(), b.readBoolean());
     }
-    public static void handle(SetChannelChargeBlockedPacket p, Supplier<NetworkEvent.Context> sup) {
-        NetworkEvent.Context ctx = sup.get();
-        ctx.enqueueWork(() -> {
-            ServerPlayer player = ctx.getSender();
-            if (player == null) return;
-            var server = player.serverLevel().getServer();
-            ChannelData data = ChannelData.get(server);
-            if (data.setChargingBlocked(p.channelId, player.getUUID(), p.targetPlayerId, p.blocked)) {
-                CreateChannelPacket.broadcastListTo(server, p.channelId);
-            }
-            CreateChannelPacket.sendListBackTo(player);
-        });
-        ctx.setPacketHandled(true);
+    public static void handle(SetChannelChargeBlockedPacket p, IPayloadContext ctx) {
+        if (!(ctx.player() instanceof ServerPlayer player)) return;
+        var server = player.level().getServer();
+        ChannelData data = ChannelData.get(server);
+        if (data.setChargingBlocked(p.channelId, player.getUUID(), p.targetPlayerId, p.blocked)) {
+            CreateChannelPacket.broadcastListTo(server, p.channelId);
+        }
+        CreateChannelPacket.sendListBackTo(player);
     }
 }

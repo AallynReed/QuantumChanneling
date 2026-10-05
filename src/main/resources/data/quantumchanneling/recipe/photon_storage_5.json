@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "EEE",
+    "ESE",
+    "EEE"
+  ],
+  "key": {
+    "E": "minecraft:emerald_block",
+    "S": "quantumchanneling:photon_storage_4"
+  },
+  "result": {
+    "id": "quantumchanneling:photon_storage_5"
+  }
+}

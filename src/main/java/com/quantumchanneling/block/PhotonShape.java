@@ -1,22 +1,22 @@
 package com.quantumchanneling.block;
 
-import net.minecraft.Util;
+import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
+import com.quantumchanneling.compat.mekanism.ChemicalCompat;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.world.level.BlockGetter;
+import net.minecraft.util.Util;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
-import net.minecraft.world.level.block.state.properties.DirectionProperty;
+import net.minecraft.world.level.block.state.properties.EnumProperty;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
-import net.minecraftforge.common.capabilities.ForgeCapabilities;
-import net.minecraftforge.energy.IEnergyStorage;
-import net.minecraftforge.items.IItemHandler;
+import net.neoforged.neoforge.capabilities.BlockCapability;
+import net.neoforged.neoforge.capabilities.Capabilities;
+import net.neoforged.neoforge.transfer.ResourceHandler;
 
 import java.util.EnumMap;
 import java.util.Map;
@@ -26,16 +26,16 @@ import java.util.Map;
  * (emitter, receiver, storage, manager).
  *
  * <p>The device is a centered 6×6×6 "core" blob with a small back plate that touches the
- * mounting surface (the {@link DirectionProperty#FACING} face's opposite side). For every
- * adjacent block that exposes an appropriately-oriented {@link IEnergyStorage}, the
- * block displays — and is bounded by — a small connector "arm" extending toward that face.
+ * mounting surface (the {@link #FACING} face's opposite side). For every adjacent block that
+ * exposes an energy, item, fluid or chemical handler, the block displays — and is bounded by — a
+ * small connector "arm" extending toward that face.
  *
  * <p>Using a centered hitbox guarantees the player can always click/break the device
  * regardless of placement orientation (the old flat-plate shape made the device unbreakable
  * on certain wall placements because the cursor passed through to the supporting block).
  */
 public final class PhotonShape {
-    public static final DirectionProperty FACING = BlockStateProperties.FACING;
+    public static final EnumProperty<Direction> FACING = BlockStateProperties.FACING;
 
     public static final BooleanProperty CONN_UP    = BooleanProperty.create("conn_up");
     public static final BooleanProperty CONN_DOWN  = BooleanProperty.create("conn_down");
@@ -97,67 +97,38 @@ public final class PhotonShape {
     }
 
     /**
-     * What kind of energy capability we want to see on a neighbor to draw a connector arm
-     * toward it. Each block class chooses one of these.
+     * Whether the neighbour on side {@code dir} exposes anything a device can route: energy, or a
+     * non-empty item / fluid / chemical handler.
+     *
+     * <p><b>Channel-bound devices never connect to each other.</b> Routing across the channel goes
+     * through {@link com.quantumchanneling.channel.QuantumChannel#members()}, not adjacency — the
+     * arm only hints "this side talks to a non-channel neighbour". Arms between adjacent devices
+     * would suggest a direct local link that doesn't exist.
      */
-    public enum ConnectionMode {
-        /** Emitter pulls energy in — show arm toward neighbors that can be extracted from. */
-        SOURCES,
-        /** Receiver pushes energy out — show arm toward neighbors that can receive. */
-        SINKS,
-        /** Storage does both. */
-        EITHER,
-        /** Manager is a gate — never draws arms. */
-        NONE;
-
-        public boolean wants(IEnergyStorage cap) {
-            return switch (this) {
-                case SOURCES -> cap.canExtract();
-                case SINKS   -> cap.canReceive();
-                case EITHER  -> cap.canExtract() || cap.canReceive();
-                case NONE    -> false;
-            };
-        }
+    public static boolean detectConnection(Level level, BlockPos pos, Direction dir) {
+        BlockPos neighborPos = pos.relative(dir);
+        if (level.getBlockEntity(neighborPos) instanceof ChannelBoundBlockEntity) return false;
+        Direction face = dir.getOpposite();
+        if (level.getCapability(Capabilities.Energy.BLOCK, neighborPos, face) != null) return true;
+        if (hasSlots(level, Capabilities.Item.BLOCK, neighborPos, face)) return true;
+        if (hasSlots(level, Capabilities.Fluid.BLOCK, neighborPos, face)) return true;
+        return ChemicalCompat.isAvailable() && hasSlots(level, ChemicalCompat.BLOCK, neighborPos, face);
     }
 
-    /**
-     * Whether the neighbor on side {@code dir} satisfies {@code mode}. All-in-one transport means
-     * a device draws a connector arm toward ANY neighbor that exposes one of the resource caps the
-     * device can route — energy (FE) or items (IItemHandler). The energy check still honors
-     * source/sink discrimination (an emitter only draws to extractable energy stores), but any
-     * IItemHandler is a valid items-side neighbor regardless of mode since items flow both ways.
-     *
-     * <p><b>Channel-bound devices never connect to each other.</b> Two emitters, two receivers, an
-     * emitter next to a receiver, etc. all skip the connection arm. Routing across the channel still
-     * happens through {@link com.quantumchanneling.channel.QuantumChannel#members()}, not adjacency
-     * — the arm is purely a hint for "this side talks to a non-channel neighbor". Drawing arms
-     * between adjacent channel devices would suggest a direct local link that doesn't exist (the
-     * channel is the link), and would also encourage users to stack devices uselessly.
-     */
-    public static boolean detectConnection(BlockGetter level, BlockPos pos, Direction dir, ConnectionMode mode) {
-        if (mode == ConnectionMode.NONE) return false;
-        BlockEntity neighbor = level.getBlockEntity(pos.relative(dir));
-        if (neighbor == null) return false;
-        if (neighbor instanceof com.quantumchanneling.blockentity.ChannelBoundBlockEntity) return false;
-        Direction face = dir.getOpposite();
-
-        IEnergyStorage energy = neighbor.getCapability(ForgeCapabilities.ENERGY, face).orElse(null);
-        if (energy != null && mode.wants(energy)) return true;
-
-        IItemHandler items = neighbor.getCapability(ForgeCapabilities.ITEM_HANDLER, face).orElse(null);
-        if (items != null && items.getSlots() > 0) return true;
-
-        return false;
+    private static boolean hasSlots(Level level, BlockCapability<? extends ResourceHandler<?>, Direction> cap,
+                                    BlockPos pos, Direction face) {
+        ResourceHandler<?> handler = level.getCapability(cap, pos, face);
+        return handler != null && handler.size() > 0;
     }
 
     /**
      * Update every CONN_* on {@code state} by scanning the world. The device is a symmetric,
      * faceless blob — it can sink to or source from any of its 6 neighbours regardless of FACING.
      */
-    public static BlockState refreshConnections(Level level, BlockPos pos, BlockState state, ConnectionMode mode) {
+    public static BlockState refreshConnections(Level level, BlockPos pos, BlockState state) {
         BlockState out = state;
         for (Direction d : Direction.values()) {
-            boolean conn = detectConnection(level, pos, d, mode);
+            boolean conn = detectConnection(level, pos, d);
             BooleanProperty prop = connProp(d);
             if (out.getValue(prop) != conn) out = out.setValue(prop, conn);
         }

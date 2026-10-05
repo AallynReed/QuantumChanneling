@@ -1,0 +1,19 @@
+{
+  "model": {
+    "type": "minecraft:composite",
+    "models": [
+      {
+        "type": "minecraft:model",
+        "model": "quantumchanneling:item/photon_emitter"
+      },
+      {
+        "type": "minecraft:special",
+        "base": "quantumchanneling:item/photon_emitter",
+        "model": {
+          "type": "quantumchanneling:photon_effect",
+          "effect": "emitter"
+        }
+      }
+    ]
+  }
+}

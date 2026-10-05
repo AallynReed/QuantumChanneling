@@ -1,11 +1,9 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.QuantumChanneling;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.fml.DistExecutor;
-import net.minecraftforge.network.NetworkEvent;
-
-import java.util.function.Supplier;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 
 /**
  * Server → client one-shot trigger for the shader-driven light burst (currently fired by the
@@ -18,7 +16,13 @@ import java.util.function.Supplier;
  * packet is only the player-facing show.
  */
 public record LightBurstPacket(double x, double y, double z, float radius, int colorRgb,
-                               String dimension) {
+                               String dimension) implements CustomPacketPayload {
+    public static final Type<LightBurstPacket> TYPE = new Type<>(QuantumChanneling.id("light_burst"));
+    public static final StreamCodec<FriendlyByteBuf, LightBurstPacket> STREAM_CODEC =
+            StreamCodec.ofMember(LightBurstPacket::encode, LightBurstPacket::decode);
+
+    @Override
+    public Type<LightBurstPacket> type() { return TYPE; }
 
     public static void encode(LightBurstPacket p, FriendlyByteBuf b) {
         b.writeDouble(p.x);
@@ -32,13 +36,5 @@ public record LightBurstPacket(double x, double y, double z, float radius, int c
     public static LightBurstPacket decode(FriendlyByteBuf b) {
         return new LightBurstPacket(b.readDouble(), b.readDouble(), b.readDouble(),
                 b.readFloat(), b.readInt(), b.readUtf());
-    }
-
-    public static void handle(LightBurstPacket p, Supplier<NetworkEvent.Context> sup) {
-        NetworkEvent.Context ctx = sup.get();
-        ctx.enqueueWork(() -> DistExecutor.unsafeRunWhenOn(Dist.CLIENT, () -> () ->
-                com.quantumchanneling.client.render.PhotonBurstRenderer.addBurst(
-                        p.x, p.y, p.z, p.radius, p.colorRgb, p.dimension)));
-        ctx.setPacketHandled(true);
     }
 }

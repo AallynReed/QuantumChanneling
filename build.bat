@@ -7,15 +7,15 @@ REM "cmd.exe /c ..." which is how Explorer launches double-clicks.
 set "PAUSE_AT_END=0"
 echo %CMDCMDLINE% | findstr /I /C:"/c"" >NUL && set "PAUSE_AT_END=1"
 
-REM Pin to Java 17 (Forge 1.20.1 requires it).
+REM Pin to Java 25 (Minecraft 26.1.2 requires it).
 if not defined JAVA_HOME (
-    set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-17.0.19.10-hotspot"
+    set "JAVA_HOME=C:\Program Files\Eclipse Adoptium\jdk-25.0.2.10-hotspot"
 )
 
 if not exist "%JAVA_HOME%\bin\java.exe" (
     echo.
     echo [build.bat] JAVA_HOME does not point at a JDK: "%JAVA_HOME%"
-    echo [build.bat] Edit build.bat or set JAVA_HOME to a JDK 17 install before running.
+    echo [build.bat] Edit build.bat or set JAVA_HOME to a JDK 25 install before running.
     echo.
     set "BUILD_RC=1"
     goto :done

@@ -2,15 +2,15 @@ package com.quantumchanneling.block;
 
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.ServerConfig;
+import com.mojang.serialization.MapCodec;
 import com.quantumchanneling.channel.LightBurstPacket;
-import com.quantumchanneling.channel.ModMessages;
 import com.quantumchanneling.compat.ftbchunks.ClaimGate;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
-import net.minecraft.world.item.PickaxeItem;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.block.LevelEvent;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
@@ -21,7 +21,6 @@ import net.minecraft.world.entity.item.FallingBlockEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
-import net.minecraft.world.item.Tiers;
 import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.BlockGetter;
 import net.minecraft.world.level.Level;
@@ -34,7 +33,7 @@ import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
-import net.minecraftforge.network.PacketDistributor;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 import java.util.List;
 
@@ -58,8 +57,7 @@ import java.util.List;
  * <p>A placed hammer can also be right-clicked to crush items resting in the block directly below
  * it, so it doubles as a manual press without a fall.
  *
- * <p>Mining: a netherite-tier pickaxe is required for drops (enforced in code; vanilla has no
- * {@code needs_netherite_tool} tag).
+ * <p>Mining: only a netherite pickaxe yields the block back ({@code neoforge:needs_netherite_tool}).
  */
 public class StarShapersHammerBlock extends FallingBlock {
     /** Anvil-like silhouette: wide head + narrow neck + wide base. */
@@ -68,27 +66,30 @@ public class StarShapersHammerBlock extends FallingBlock {
             Block.box(6, 4,  6, 10, 12, 10),   // neck
             Block.box(2, 12, 5, 14, 16, 11));  // head
 
+    public static final MapCodec<StarShapersHammerBlock> CODEC = simpleCodec(StarShapersHammerBlock::new);
+
+    /** Steel-grey dust when the hammer is about to fall. */
+    private static final int DUST_COLOR = 0xFF8A8F98;
+
     public StarShapersHammerBlock(Properties properties) {
         super(properties);
     }
 
-    /** Endgame infrastructure — only a netherite-tier pickaxe yields the block back. Vanilla's
-     *  {@code needs_*_tool} tag system tops out at diamond, so the check lives here in code. */
     @Override
-    public boolean canHarvestBlock(BlockState state, BlockGetter level, BlockPos pos, Player player) {
-        // A netherite pickaxe specifically — not just any netherite TieredItem (sword/axe count as
-        // TieredItem and would otherwise harvest an anvil-like block, which reads wrong).
-        return player.getMainHandItem().getItem() instanceof PickaxeItem pick
-                && pick.getTier().getLevel() >= Tiers.NETHERITE.getLevel();
+    protected MapCodec<StarShapersHammerBlock> codec() { return CODEC; }
+
+    @Override
+    public int getDustColor(BlockState state, BlockGetter level, BlockPos pos) {
+        return DUST_COLOR;
     }
 
     @Override
-    public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
+    protected VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
         return SHAPE;
     }
 
     @Override
-    public VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
+    protected VoxelShape getCollisionShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext ctx) {
         return SHAPE;
     }
 
@@ -106,7 +107,7 @@ public class StarShapersHammerBlock extends FallingBlock {
     public void onLand(Level level, BlockPos pos, BlockState fallingState, BlockState landedState,
                        FallingBlockEntity entity) {
         super.onLand(level, pos, fallingState, landedState, entity);
-        if (level.isClientSide) return;
+        if (level.isClientSide()) return;
 
         BlockPos start = entity.getStartPos();
         // Inclusive column from the highest of (start, pos) down to the landing position. Add a
@@ -136,10 +137,8 @@ public class StarShapersHammerBlock extends FallingBlock {
      * block directly below it, so the hammer works as a stationary station and not only by falling.
      */
     @Override
-    public InteractionResult use(BlockState state, Level level, BlockPos pos, Player player,
-                                 InteractionHand hand, BlockHitResult hit) {
-        if (level.isClientSide) return InteractionResult.SUCCESS;
-        if (!(level instanceof ServerLevel sl)) return InteractionResult.CONSUME;
+    protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hit) {
+        if (!(level instanceof ServerLevel sl)) return InteractionResult.SUCCESS;
         BlockPos below = pos.below();
         AABB box = new AABB(below.getX() - 0.1, below.getY() - 0.1, below.getZ() - 0.1,
                 below.getX() + 1.1, below.getY() + 1.1, below.getZ() + 1.1);
@@ -147,7 +146,7 @@ public class StarShapersHammerBlock extends FallingBlock {
         if (result.totalCrushed() == 0) return InteractionResult.PASS;
         emitCrushEffects(sl, pos);
         if (result.whiteDwarfsCrushed() > 0) triggerCollapseBurst(sl, pos, result.dwarfInWater());
-        return InteractionResult.CONSUME;
+        return InteractionResult.SUCCESS;
     }
 
     /** One crush sweep: total items crushed, how many were White Dwarfs (they fire the collapse
@@ -181,7 +180,7 @@ public class StarShapersHammerBlock extends FallingBlock {
             totalCrushed += stack.getCount();
             if (isDwarfCrush) whiteDwarfsCrushed += stack.getCount();
 
-            int maxStack = template.getItem().getMaxStackSize();
+            int maxStack = template.getMaxStackSize();
             int remaining = totalOutput;
             while (remaining > 0) {
                 int batch = Math.min(remaining, maxStack);
@@ -201,7 +200,7 @@ public class StarShapersHammerBlock extends FallingBlock {
                 20, 0.4, 0.2, 0.4, 0.1);
         sl.sendParticles(ParticleTypes.SMOKE, pos.getX() + 0.5, pos.getY() + 0.3, pos.getZ() + 0.5,
                 12, 0.3, 0.1, 0.3, 0.02);
-        sl.levelEvent(1029, pos, 0);   // Forge level event 1029 = anvil land
+        sl.levelEvent(LevelEvent.SOUND_ANVIL_LAND, pos, 0);
     }
 
     /**
@@ -301,7 +300,7 @@ public class StarShapersHammerBlock extends FallingBlock {
 
         Vec3 center = Vec3.atCenterOf(hammerPos);
         AABB damageBox = new AABB(center, center).inflate(radius);
-        DamageSource source = level.damageSources().explosion(null);
+        DamageSource source = level.damageSources().explosion(null, null);
 
         // ---- entity damage ----
         // Filter at iteration time — only LivingEntities take damage; ItemEntities (and other
@@ -313,7 +312,7 @@ public class StarShapersHammerBlock extends FallingBlock {
             float falloff = 1.0f - (float) (dist / radius);
             float damage = peakDamage * falloff;
             if (damage < 0.5f) continue;
-            e.hurt(source, damage);
+            e.hurtServer(level, source, damage);
 
             // Light knockback away from the burst origin — sells the "blast" without ragdolling.
             // Scaled with the amplification so the water case feels appropriately stronger.
@@ -344,12 +343,9 @@ public class StarShapersHammerBlock extends FallingBlock {
         // water-amplified burst still receive the trigger (the visual is ~30 blocks wide; people
         // within ~60 blocks should see it land).
         double networkRadius = Math.max(96.0, radius * 2.5);
-        PacketDistributor.TargetPoint target = new PacketDistributor.TargetPoint(
-                center.x, center.y, center.z, networkRadius, level.dimension());
-        ModMessages.CHANNEL.send(
-                PacketDistributor.NEAR.with(() -> target),
+        PacketDistributor.sendToPlayersNear(level, null, center.x, center.y, center.z, networkRadius,
                 new LightBurstPacket(center.x, center.y, center.z, radius, COLLAPSE_COLOR_RGB,
-                        level.dimension().location().toString()));
+                        level.dimension().identifier().toString()));
     }
 
     /**
@@ -368,10 +364,10 @@ public class StarShapersHammerBlock extends FallingBlock {
      *       Vaporising loose entities matches the visual.</li>
      * </ul>
      *
-     * <p>The Uncontained Black Hole exemption is enforced here AND on the item class via
-     * {@code canBeHurtBy} (which catches TNT / creeper / wither explosions). Both checks exist
-     * because our collapse bypasses the damage system entirely (it discards entities wholesale
-     * rather than calling hurt), so the damage-tag-based immunity wouldn't fire here on its own.
+     * <p>The Uncontained Black Hole exemption is enforced here AND on the item through its
+     * explosion damage-resistance component (which catches TNT / creeper / wither explosions).
+     * Both exist because our collapse bypasses the damage system entirely (it discards entities
+     * wholesale rather than hurting them), so the component alone wouldn't fire here.
      */
     /** Total game-tick duration the UCB items remain hovering: 15 ticks of supernova flash (0.75s)
      *  + 24 ticks of implosion (1.2s) + 2 ticks slack so the fade-out completes before gravity
@@ -471,7 +467,7 @@ public class StarShapersHammerBlock extends FallingBlock {
                     cursor.set(center.getX() + dx, center.getY() + dy, center.getZ() + dz);
                     if (cursor.equals(center)) continue;
                     if (claimCache != null) {
-                        long chunkKey = net.minecraft.world.level.ChunkPos.asLong(cursor.getX() >> 4, cursor.getZ() >> 4);
+                        long chunkKey = ChunkPos.pack(cursor);
                         Boolean claimed = claimCache.get(chunkKey);
                         if (claimed == null) {
                             claimed = ClaimGate.isChunkClaimed(level, cursor);

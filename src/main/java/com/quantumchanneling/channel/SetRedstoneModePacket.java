@@ -1,15 +1,23 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.network.NetworkEvent;
-
-import java.util.function.Supplier;
+import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 /** Client → server: set the device's redstone gating mode (ordinal of {@code RedstoneMode}). */
-public record SetRedstoneModePacket(BlockPos devicePos, byte modeOrdinal) {
+public record SetRedstoneModePacket(BlockPos devicePos, byte modeOrdinal) implements CustomPacketPayload {
+    public static final Type<SetRedstoneModePacket> TYPE = new Type<>(QuantumChanneling.id("set_redstone_mode"));
+    public static final StreamCodec<FriendlyByteBuf, SetRedstoneModePacket> STREAM_CODEC =
+            StreamCodec.ofMember(SetRedstoneModePacket::encode, SetRedstoneModePacket::decode);
+
+    @Override
+    public Type<SetRedstoneModePacket> type() { return TYPE; }
+
     public static void encode(SetRedstoneModePacket p, FriendlyByteBuf b) {
         b.writeBlockPos(p.devicePos);
         b.writeByte(p.modeOrdinal);
@@ -17,16 +25,11 @@ public record SetRedstoneModePacket(BlockPos devicePos, byte modeOrdinal) {
     public static SetRedstoneModePacket decode(FriendlyByteBuf b) {
         return new SetRedstoneModePacket(b.readBlockPos(), b.readByte());
     }
-    public static void handle(SetRedstoneModePacket p, Supplier<NetworkEvent.Context> sup) {
-        NetworkEvent.Context ctx = sup.get();
-        ctx.enqueueWork(() -> {
-            ServerPlayer player = ctx.getSender();
-            if (player == null) return;
-            ChannelBoundBlockEntity bound = PacketUtil.manageableDevice(player, p.devicePos);
-            if (bound == null) return;
-            bound.setRedstoneMode(ChannelBoundBlockEntity.RedstoneMode.byOrdinal(p.modeOrdinal));
-            CreateChannelPacket.sendListBackTo(player);
-        });
-        ctx.setPacketHandled(true);
+    public static void handle(SetRedstoneModePacket p, IPayloadContext ctx) {
+        if (!(ctx.player() instanceof ServerPlayer player)) return;
+        ChannelBoundBlockEntity bound = PacketUtil.manageableDevice(player, p.devicePos);
+        if (bound == null) return;
+        bound.setRedstoneMode(ChannelBoundBlockEntity.RedstoneMode.byOrdinal(p.modeOrdinal));
+        CreateChannelPacket.sendListBackTo(player);
     }
 }

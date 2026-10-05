@@ -1,0 +1,19 @@
+{
+  "model": {
+    "type": "minecraft:composite",
+    "models": [
+      {
+        "type": "minecraft:model",
+        "model": "quantumchanneling:item/photon_manager"
+      },
+      {
+        "type": "minecraft:special",
+        "base": "quantumchanneling:item/photon_manager",
+        "model": {
+          "type": "quantumchanneling:photon_effect",
+          "effect": "manager"
+        }
+      }
+    ]
+  }
+}

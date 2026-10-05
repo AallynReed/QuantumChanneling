@@ -1,6 +1,6 @@
 package com.quantumchanneling.api;
 
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.util.Set;
 import java.util.UUID;
@@ -15,8 +15,8 @@ public interface IQuantumSubchannelView {
     /** 0 when no color tag is set, otherwise a packed 0xRRGGBB triple. */
     int color();
     boolean isWhitelist();
-    Set<ResourceLocation> entryIds();
-    Set<ResourceLocation> entryTags();
+    Set<Identifier> entryIds();
+    Set<Identifier> entryTags();
 
     /** Lifetime counter (since world load). Items: stack count. Fluids/Gas: mB. */
     long routedTotal();

@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "GGG",
+    "GSG",
+    "GGG"
+  ],
+  "key": {
+    "G": "minecraft:gold_block",
+    "S": "quantumchanneling:photon_storage_2"
+  },
+  "result": {
+    "id": "quantumchanneling:photon_storage_3"
+  }
+}

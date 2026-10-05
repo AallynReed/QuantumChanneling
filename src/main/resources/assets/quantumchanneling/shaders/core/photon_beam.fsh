@@ -1,4 +1,7 @@
-#version 150
+#version 330
+
+#moj_import <minecraft:dynamictransforms.glsl>
+#moj_import <minecraft:globals.glsl>
 
 // Beam shader — tapered glowing tube from the ball edge to a face port. UV layout:
 //   u (texCoord.x) runs along the beam (0 = ball end on receivers, 1 = face end; flipped for
@@ -14,9 +17,6 @@
 
 in vec4 vertexColor;
 in vec2 texCoord;
-
-uniform vec4 ColorModulator;
-uniform float GameTime;
 
 out vec4 fragColor;
 

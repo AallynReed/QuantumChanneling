@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "IGI",
+    "GQG",
+    "IRI"
+  ],
+  "key": {
+    "I": "minecraft:iron_ingot",
+    "G": "minecraft:glass",
+    "Q": "quantumchanneling:quantum_core",
+    "R": "minecraft:redstone_block"
+  },
+  "result": {
+    "id": "quantumchanneling:photon_emitter"
+  }
+}

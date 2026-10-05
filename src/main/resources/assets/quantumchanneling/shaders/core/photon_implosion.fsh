@@ -1,4 +1,7 @@
-#version 150
+#version 330
+
+#moj_import <minecraft:dynamictransforms.glsl>
+#moj_import <minecraft:globals.glsl>
 
 // Phase-2 implosion vortex. Reads as matter being vacuumed into a forming singularity:
 //   - A set of "stretched balls" (blobs) spiral inward on a loop. Each blob elongates radially
@@ -16,9 +19,6 @@
 
 in vec4 vertexColor;
 in vec2 texCoord;
-
-uniform vec4 ColorModulator;
-uniform float GameTime;
 
 out vec4 fragColor;
 

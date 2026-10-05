@@ -6,13 +6,11 @@ import com.quantumchanneling.blockentity.PhotonReceiverBlockEntity;
 import com.quantumchanneling.blockentity.PhotonStorageBlockEntity;
 import com.quantumchanneling.blockentity.PhotonManagerBlockEntity;
 import com.quantumchanneling.channel.ChannelData;
-import com.quantumchanneling.channel.FluidSubchannel;
-import com.quantumchanneling.channel.GasSubchannel;
-import com.quantumchanneling.channel.ItemSubchannel;
 import com.quantumchanneling.channel.QuantumChannel;
+import com.quantumchanneling.channel.Subchannel;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -40,7 +38,7 @@ public final class QuantumChannelingAPI {
 
     /** Deterministic member ordering: dimension location string, then packed BlockPos long. */
     private static final java.util.Comparator<GlobalPos> MEMBER_ORDER =
-            java.util.Comparator.comparing((GlobalPos gp) -> gp.dimension().location().toString())
+            java.util.Comparator.comparing((GlobalPos gp) -> gp.dimension().identifier().toString())
                     .thenComparingLong(gp -> gp.pos().asLong());
 
     /** Every channel currently known to {@code server}. Defensive copy. */
@@ -68,9 +66,9 @@ public final class QuantumChannelingAPI {
     }
 
     /** Wraps a hosted subchannel in its read-only view without a device lookup. Internal use. */
-    public static IQuantumSubchannelView viewOf(ItemSubchannel s)  { return new ItemSubView(s); }
-    public static IQuantumSubchannelView viewOf(FluidSubchannel s) { return new FluidSubView(s); }
-    public static IQuantumSubchannelView viewOf(GasSubchannel s)   { return new GasSubView(s); }
+    public static IQuantumSubchannelView viewOf(Subchannel s, IQuantumSubchannelView.Kind kind) {
+        return new SubView(s, kind);
+    }
 
     /* ---- adapters ---- */
 
@@ -137,59 +135,28 @@ public final class QuantumChannelingAPI {
             if (bound instanceof PhotonReceiverBlockEntity rc) return rc.getLastTickThroughput();
             return 0;
         }
-        @Override public boolean isItemsEnabled()  { return bound.isItemsEnabled(); }
-        @Override public boolean isFluidsEnabled() { return bound.isFluidsEnabled(); }
-        @Override public boolean isGasEnabled()    { return bound.isGasEnabled(); }
-        @Override public List<IQuantumSubchannelView> itemSubchannels() {
+        @Override public boolean isItemsEnabled()  { return bound.isEnabled(IQuantumSubchannelView.Kind.ITEM); }
+        @Override public boolean isFluidsEnabled() { return bound.isEnabled(IQuantumSubchannelView.Kind.FLUID); }
+        @Override public boolean isGasEnabled()    { return bound.isEnabled(IQuantumSubchannelView.Kind.GAS); }
+        @Override public List<IQuantumSubchannelView> itemSubchannels()  { return hosted(IQuantumSubchannelView.Kind.ITEM); }
+        @Override public List<IQuantumSubchannelView> fluidSubchannels() { return hosted(IQuantumSubchannelView.Kind.FLUID); }
+        @Override public List<IQuantumSubchannelView> gasSubchannels()   { return hosted(IQuantumSubchannelView.Kind.GAS); }
+
+        private List<IQuantumSubchannelView> hosted(IQuantumSubchannelView.Kind kind) {
             if (!(bound instanceof PhotonEmitterBlockEntity em)) return List.of();
             List<IQuantumSubchannelView> out = new ArrayList<>();
-            for (ItemSubchannel s : em.itemSubchannels()) out.add(new ItemSubView(s));
-            return out;
-        }
-        @Override public List<IQuantumSubchannelView> fluidSubchannels() {
-            if (!(bound instanceof PhotonEmitterBlockEntity em)) return List.of();
-            List<IQuantumSubchannelView> out = new ArrayList<>();
-            for (FluidSubchannel s : em.fluidSubchannels()) out.add(new FluidSubView(s));
-            return out;
-        }
-        @Override public List<IQuantumSubchannelView> gasSubchannels() {
-            if (!(bound instanceof PhotonEmitterBlockEntity em)) return List.of();
-            List<IQuantumSubchannelView> out = new ArrayList<>();
-            for (GasSubchannel s : em.gasSubchannels()) out.add(new GasSubView(s));
+            for (Subchannel s : em.subchannels(kind)) out.add(new SubView(s, kind));
             return out;
         }
     }
 
-    private record ItemSubView(ItemSubchannel s) implements IQuantumSubchannelView {
+    private record SubView(Subchannel s, IQuantumSubchannelView.Kind kind) implements IQuantumSubchannelView {
         @Override public UUID id() { return s.id(); }
         @Override public String name() { return s.name(); }
-        @Override public Kind kind() { return Kind.ITEM; }
         @Override public int color() { return s.color(); }
         @Override public boolean isWhitelist() { return s.filter().isWhitelist(); }
-        @Override public Set<ResourceLocation> entryIds() { return Collections.unmodifiableSet(s.filter().items()); }
-        @Override public Set<ResourceLocation> entryTags() { return Collections.unmodifiableSet(s.filter().tags()); }
-        @Override public long routedTotal() { return s.routedTotal(); }
-        @Override public int routedLastWindow() { return s.routedLastWindow(); }
-    }
-    private record FluidSubView(FluidSubchannel s) implements IQuantumSubchannelView {
-        @Override public UUID id() { return s.id(); }
-        @Override public String name() { return s.name(); }
-        @Override public Kind kind() { return Kind.FLUID; }
-        @Override public int color() { return s.color(); }
-        @Override public boolean isWhitelist() { return s.filter().isWhitelist(); }
-        @Override public Set<ResourceLocation> entryIds() { return Collections.unmodifiableSet(s.filter().fluids()); }
-        @Override public Set<ResourceLocation> entryTags() { return Collections.unmodifiableSet(s.filter().tags()); }
-        @Override public long routedTotal() { return s.routedTotal(); }
-        @Override public int routedLastWindow() { return s.routedLastWindow(); }
-    }
-    private record GasSubView(GasSubchannel s) implements IQuantumSubchannelView {
-        @Override public UUID id() { return s.id(); }
-        @Override public String name() { return s.name(); }
-        @Override public Kind kind() { return Kind.GAS; }
-        @Override public int color() { return s.color(); }
-        @Override public boolean isWhitelist() { return s.filter().isWhitelist(); }
-        @Override public Set<ResourceLocation> entryIds() { return Collections.unmodifiableSet(s.filter().gases()); }
-        @Override public Set<ResourceLocation> entryTags() { return Collections.unmodifiableSet(s.filter().tags()); }
+        @Override public Set<Identifier> entryIds() { return Collections.unmodifiableSet(s.filter().ids()); }
+        @Override public Set<Identifier> entryTags() { return Collections.unmodifiableSet(s.filter().tags()); }
         @Override public long routedTotal() { return s.routedTotal(); }
         @Override public int routedLastWindow() { return s.routedLastWindow(); }
     }

@@ -1,4 +1,7 @@
-#version 150
+#version 330
+
+#moj_import <minecraft:dynamictransforms.glsl>
+#moj_import <minecraft:globals.glsl>
 
 // Phase-1 stray light beams. White-cored rays with a faint rainbow fringe along their edges, as
 // if the beam were passing through a prism (chromatic dispersion). Applied to the camera-aligned
@@ -12,9 +15,6 @@
 
 in vec4 vertexColor;
 in vec2 texCoord;
-
-uniform vec4 ColorModulator;
-uniform float GameTime;
 
 out vec4 fragColor;
 

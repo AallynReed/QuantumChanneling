@@ -1,4 +1,7 @@
-#version 150
+#version 330
+
+#moj_import <minecraft:dynamictransforms.glsl>
+#moj_import <minecraft:globals.glsl>
 
 // Black-hole event-horizon shader. Smooth dark sphere with a thin bright photon-sphere lensing
 // rim. Drawn ON TOP of the accretion halo so it occludes the halo's center and overpaints with
@@ -8,9 +11,6 @@
 
 in vec4 vertexColor;
 in vec2 texCoord;
-
-uniform vec4 ColorModulator;
-uniform float GameTime;
 
 out vec4 fragColor;
 

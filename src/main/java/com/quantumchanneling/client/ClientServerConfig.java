@@ -1,5 +1,7 @@
 package com.quantumchanneling.client;
 
+import com.quantumchanneling.channel.SyncServerConfigPacket;
+
 /**
  * Client-side mirror of {@link com.quantumchanneling.ServerConfig}. Populated by the sync packet
  * the server sends on login and again whenever an admin reloads the config. All fields hold the
@@ -43,6 +45,35 @@ public final class ClientServerConfig {
     public static boolean slotInventoryEnabled = true;
     public static boolean slotArmorEnabled     = true;
     public static boolean slotCuriosEnabled    = true;
+
+    /** Mirrors the server's snapshot. Called from the client payload handler. */
+    public static void apply(SyncServerConfigPacket p) {
+        allowCrossDimension      = p.allowCrossDimension();
+        storageCapacities        = new long[]{
+                p.storageT1(), p.storageT2(), p.storageT3(), p.storageT4(), p.storageT5() };
+        itemsRoutingEnabled      = p.itemsEnabled();
+        itemsMaxBatch            = p.itemsMaxBatch();
+        itemsMaxSubsPerEmitter   = p.itemsPerEmitter();
+        itemsMaxSubsPerReceiver  = p.itemsPerReceiver();
+        itemsMaxSubsPerChannel   = p.itemsPerChannel();
+        fluidsRoutingEnabled     = p.fluidsEnabled();
+        fluidsMaxBatch           = p.fluidsMaxBatch();
+        fluidsMaxSubsPerEmitter  = p.fluidsPerEmitter();
+        fluidsMaxSubsPerReceiver = p.fluidsPerReceiver();
+        fluidsMaxSubsPerChannel  = p.fluidsPerChannel();
+        gasesRoutingEnabled      = p.gasesEnabled();
+        gasesMaxBatch            = p.gasesMaxBatch();
+        gasesMaxSubsPerEmitter   = p.gasesPerEmitter();
+        gasesMaxSubsPerReceiver  = p.gasesPerReceiver();
+        gasesMaxSubsPerChannel   = p.gasesPerChannel();
+        heatRoutingEnabled       = p.heatEnabled();
+        wirelessEnabled          = p.wirelessEnabled();
+        slotHandEnabled          = p.slotHand();
+        slotHotbarEnabled        = p.slotHotbar();
+        slotInventoryEnabled     = p.slotInventory();
+        slotArmorEnabled         = p.slotArmor();
+        slotCuriosEnabled        = p.slotCurios();
+    }
 
     /**
      * Copy the current local {@link com.quantumchanneling.ServerConfig} values into this mirror.

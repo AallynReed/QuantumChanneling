@@ -2,12 +2,12 @@ package com.quantumchanneling.api.event;
 
 import com.quantumchanneling.api.IQuantumSubchannelView;
 import net.minecraft.core.GlobalPos;
-import net.minecraftforge.eventbus.api.Event;
+import net.neoforged.bus.api.Event;
 
 import java.util.UUID;
 
 /**
- * Fired on the {@link net.minecraftforge.common.MinecraftForge#EVENT_BUS Forge event bus}, on the
+ * Fired on the {@link net.neoforged.neoforge.common.NeoForge#EVENT_BUS NeoForge event bus}, on the
  * server thread, once per successful subchannel route. Items pushed: {@link #amount()} is the
  * stack-count. Fluids / gas pushed: {@code amount} is mB.
  *

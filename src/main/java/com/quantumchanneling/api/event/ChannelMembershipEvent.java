@@ -1,7 +1,7 @@
 package com.quantumchanneling.api.event;
 
 import net.minecraft.core.GlobalPos;
-import net.minecraftforge.eventbus.api.Event;
+import net.neoforged.bus.api.Event;
 
 import java.util.UUID;
 

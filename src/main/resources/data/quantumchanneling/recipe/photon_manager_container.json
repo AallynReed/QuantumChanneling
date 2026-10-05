@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "#O#",
+    "OGO",
+    "#O#"
+  ],
+  "key": {
+    "#": "minecraft:diamond",
+    "O": "minecraft:obsidian",
+    "G": "minecraft:glass_pane"
+  },
+  "result": {
+    "id": "quantumchanneling:photon_manager_container"
+  }
+}

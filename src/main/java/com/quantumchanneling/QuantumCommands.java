@@ -1,38 +1,32 @@
 package com.quantumchanneling;
 
-import com.electronwill.nightconfig.core.file.CommentedFileConfig;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.context.CommandContext;
+import com.quantumchanneling.channel.ChannelData;
 import com.quantumchanneling.channel.SyncServerConfigPacket;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
-import net.minecraftforge.event.RegisterCommandsEvent;
-import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.config.ConfigTracker;
-import net.minecraftforge.fml.config.ModConfig;
-
-import java.lang.reflect.Field;
-import java.util.Map;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
 
 /**
  * Console commands for live config control.
  *
  * <ul>
- *   <li>{@code /quantumchanneling reload} (alias {@code /qc reload}) — forces a re-read of the
- *       server-config TOML from disk, re-applies values to the hot-path mirrors, and pushes the
- *       fresh snapshot to every connected client. Useful when Forge's file watcher missed an edit
- *       or you want to be certain.</li>
+ *   <li>{@code /quantumchanneling reload} (alias {@code /qc reload}) — re-applies the config values
+ *       (NeoForge's file watcher keeps them in sync with the TOML on disk) to the hot-path mirrors
+ *       and channel data, then pushes the fresh snapshot to every connected client.</li>
  *   <li>{@code /qc status} — prints the headline config values to chat so you can verify what's
  *       active without opening the GUI.</li>
  * </ul>
  *
  * <p>Requires permission level 2 (op).
  */
-@Mod.EventBusSubscriber(modid = QuantumChanneling.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
+@EventBusSubscriber(modid = QuantumChanneling.MODID)
 public final class QuantumCommands {
     private QuantumCommands() {}
 
@@ -41,14 +35,14 @@ public final class QuantumCommands {
         // Build the primary command and capture the node so the alias can redirect to it.
         var primary = event.getDispatcher().register(
                 Commands.literal("quantumchanneling")
-                        .requires(s -> s.hasPermission(2))
+                        .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
                         .then(Commands.literal("reload").executes(QuantumCommands::reload))
                         .then(Commands.literal("status").executes(QuantumCommands::status))
         );
         // /qc as a redirect alias — same arguments, same permissions.
         event.getDispatcher().register(
                 Commands.literal("qc")
-                        .requires(s -> s.hasPermission(2))
+                        .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
                         .redirect(primary)
         );
     }
@@ -57,17 +51,13 @@ public final class QuantumCommands {
         CommandSourceStack source = ctx.getSource();
         MinecraftServer server = source.getServer();
 
-        boolean diskReloaded = forceDiskReload();
-        // Mirror fields refresh from the (now-current) spec values via the normal ModConfigEvent
-        // path — but we also poke them ourselves so partial-load races can't leave anything stale.
-        // ServerConfig's onLoad re-runs when the file is read, so a successful diskReloaded path
-        // already updated everything; this is the safety belt.
+        ServerConfig.reapplyLocal();
+        ChannelData.get(server).applyChargingSlotConfig();
         SyncServerConfigPacket.sendToAll(server);
 
         int players = server.getPlayerList().getPlayers().size();
         Component msg = Component.literal("Quantum Channeling: ")
-                .append(Component.literal(diskReloaded ? "config reloaded from disk" : "spec re-applied (file watcher state used)")
-                        .withStyle(diskReloaded ? ChatFormatting.GREEN : ChatFormatting.YELLOW))
+                .append(Component.literal("config re-applied").withStyle(ChatFormatting.GREEN))
                 .append(Component.literal(" · " + players + " player(s) notified"));
         source.sendSuccess(() -> msg, true);
         return Command.SINGLE_SUCCESS;
@@ -105,35 +95,5 @@ public final class QuantumCommands {
         Component c = Component.literal(key + ": ").withStyle(ChatFormatting.GRAY)
                 .copy().append(Component.literal(value).withStyle(ChatFormatting.WHITE));
         source.sendSuccess(() -> c, false);
-    }
-
-    /**
-     * Asks Forge's underlying NightConfig file handle to re-read the toml from disk. The
-     * subsequent ModConfigEvent.Reloading then re-runs {@link ServerConfig#onLoad}, which
-     * updates the static mirrors and (because it's a reload event) calls
-     * {@link SyncServerConfigPacket#sendToAll}.
-     *
-     * <p>Done via reflection because Forge doesn't expose this on a stable public API — works on
-     * 1.20.1 Forge but may need updating on later versions. Falls back to a no-op return on any
-     * reflection failure; the command then falls back to a spec re-apply + broadcast.
-     */
-    private static boolean forceDiskReload() {
-        try {
-            Field fileMapField = ConfigTracker.class.getDeclaredField("fileMap");
-            fileMapField.setAccessible(true);
-            @SuppressWarnings("unchecked")
-            Map<String, ModConfig> fileMap = (Map<String, ModConfig>) fileMapField.get(ConfigTracker.INSTANCE);
-            for (ModConfig cfg : fileMap.values()) {
-                if (cfg.getSpec() != ServerConfig.SPEC) continue;
-                if (cfg.getConfigData() instanceof CommentedFileConfig fileCfg) {
-                    fileCfg.load();
-                    return true;
-                }
-            }
-        } catch (Throwable ignored) {
-            // Forge internal layout changed — fall through to false and let the caller take the
-            // already-current spec values from the in-memory mirror.
-        }
-        return false;
     }
 }

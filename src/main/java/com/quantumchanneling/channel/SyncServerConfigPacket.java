@@ -1,20 +1,17 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.ServerConfig;
-import com.quantumchanneling.client.ClientServerConfig;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.api.distmarker.Dist;
-import net.minecraftforge.fml.DistExecutor;
-import net.minecraftforge.network.NetworkEvent;
-import net.minecraftforge.network.PacketDistributor;
-
-import java.util.function.Supplier;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 /**
  * Server → client snapshot of {@link ServerConfig}. Sent once on login and again whenever an admin
- * reloads the server config. The client mirrors the values into {@link ClientServerConfig} for the
+ * reloads the server config. The client mirrors the values into {@link com.quantumchanneling.client.ClientServerConfig} for the
  * UI gates — server stays authoritative for actual enforcement.
  */
 public record SyncServerConfigPacket(
@@ -26,7 +23,14 @@ public record SyncServerConfigPacket(
         boolean heatEnabled,
         boolean wirelessEnabled,
         boolean slotHand, boolean slotHotbar, boolean slotInventory, boolean slotArmor, boolean slotCurios
-) {
+) implements CustomPacketPayload {
+    public static final Type<SyncServerConfigPacket> TYPE = new Type<>(QuantumChanneling.id("sync_server_config"));
+    public static final StreamCodec<FriendlyByteBuf, SyncServerConfigPacket> STREAM_CODEC =
+            StreamCodec.ofMember(SyncServerConfigPacket::encode, SyncServerConfigPacket::decode);
+
+    @Override
+    public Type<SyncServerConfigPacket> type() { return TYPE; }
+
     public static SyncServerConfigPacket snapshot() {
         long[] caps = ServerConfig.storageCapacities;
         return new SyncServerConfigPacket(
@@ -75,49 +79,14 @@ public record SyncServerConfigPacket(
                 b.readBoolean(), b.readBoolean(), b.readBoolean(), b.readBoolean(), b.readBoolean());
     }
 
-    public static void handle(SyncServerConfigPacket p, Supplier<NetworkEvent.Context> ctxSup) {
-        NetworkEvent.Context ctx = ctxSup.get();
-        ctx.enqueueWork(() ->
-                DistExecutor.unsafeRunWhenOn(net.minecraftforge.api.distmarker.Dist.CLIENT, () -> () -> applyClient(p)));
-        ctx.setPacketHandled(true);
-    }
-
-    private static void applyClient(SyncServerConfigPacket p) {
-        ClientServerConfig.allowCrossDimension     = p.allowCrossDimension;
-        ClientServerConfig.storageCapacities       = new long[]{
-                p.storageT1, p.storageT2, p.storageT3, p.storageT4, p.storageT5 };
-        ClientServerConfig.itemsRoutingEnabled     = p.itemsEnabled;
-        ClientServerConfig.itemsMaxBatch           = p.itemsMaxBatch;
-        ClientServerConfig.itemsMaxSubsPerEmitter  = p.itemsPerEmitter;
-        ClientServerConfig.itemsMaxSubsPerReceiver = p.itemsPerReceiver;
-        ClientServerConfig.itemsMaxSubsPerChannel  = p.itemsPerChannel;
-        ClientServerConfig.fluidsRoutingEnabled    = p.fluidsEnabled;
-        ClientServerConfig.fluidsMaxBatch          = p.fluidsMaxBatch;
-        ClientServerConfig.fluidsMaxSubsPerEmitter = p.fluidsPerEmitter;
-        ClientServerConfig.fluidsMaxSubsPerReceiver = p.fluidsPerReceiver;
-        ClientServerConfig.fluidsMaxSubsPerChannel = p.fluidsPerChannel;
-        ClientServerConfig.gasesRoutingEnabled     = p.gasesEnabled;
-        ClientServerConfig.gasesMaxBatch           = p.gasesMaxBatch;
-        ClientServerConfig.gasesMaxSubsPerEmitter  = p.gasesPerEmitter;
-        ClientServerConfig.gasesMaxSubsPerReceiver = p.gasesPerReceiver;
-        ClientServerConfig.gasesMaxSubsPerChannel  = p.gasesPerChannel;
-        ClientServerConfig.heatRoutingEnabled      = p.heatEnabled;
-        ClientServerConfig.wirelessEnabled         = p.wirelessEnabled;
-        ClientServerConfig.slotHandEnabled         = p.slotHand;
-        ClientServerConfig.slotHotbarEnabled       = p.slotHotbar;
-        ClientServerConfig.slotInventoryEnabled    = p.slotInventory;
-        ClientServerConfig.slotArmorEnabled        = p.slotArmor;
-        ClientServerConfig.slotCuriosEnabled       = p.slotCurios;
-    }
-
     public static void sendTo(ServerPlayer player) {
-        ModMessages.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player), snapshot());
+        PacketDistributor.sendToPlayer(player, snapshot());
     }
 
     public static void sendToAll(MinecraftServer server) {
         SyncServerConfigPacket snap = snapshot();
         for (ServerPlayer p : server.getPlayerList().getPlayers()) {
-            ModMessages.CHANNEL.send(PacketDistributor.PLAYER.with(() -> p), snap);
+            PacketDistributor.sendToPlayer(p, snap);
         }
     }
 }

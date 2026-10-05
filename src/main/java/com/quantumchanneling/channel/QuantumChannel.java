@@ -1,19 +1,16 @@
 package com.quantumchanneling.channel;
 
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
-import net.minecraft.core.registries.Registries;
+import net.minecraft.core.UUIDUtil;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
-import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.level.Level;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -21,8 +18,6 @@ import java.util.UUID;
 
 /** A named quantum channel. Owns its identity, members, permissions, and charging mode. */
 public class QuantumChannel {
-    private static final String LEGACY_PREFIX = "Legacy ";
-
     private final UUID id;
     private String name;
     /** Mutable so ownership can be transferred. */
@@ -183,9 +178,9 @@ public class QuantumChannel {
 
     public CompoundTag save() {
         CompoundTag tag = new CompoundTag();
-        tag.putUUID("Id", id);
+        tag.store("Id", UUIDUtil.CODEC, id);
         tag.putString("Name", name);
-        if (ownerId != null) tag.putUUID("OwnerId", ownerId);
+        tag.storeNullable("OwnerId", UUIDUtil.CODEC, ownerId);
         if (!ownerName.isEmpty()) tag.putString("OwnerName", ownerName);
         if (publicAccess) tag.putBoolean("Public", true);
         if (chargingSlots != ChargingSlots.OFF) tag.putInt("ChargingSlots", chargingSlots);
@@ -199,34 +194,18 @@ public class QuantumChannel {
         for (int i = 0; i < 4; i++) {
             if (armorPiecePriorities[i] != 0) tag.putInt("SlotPrArmorPiece" + i, armorPiecePriorities[i]);
         }
-        if (!chargingBlocked.isEmpty()) {
-            ListTag blocked = new ListTag();
-            for (UUID pid : chargingBlocked) {
-                CompoundTag e = new CompoundTag();
-                e.putUUID("Id", pid);
-                blocked.add(e);
-            }
-            tag.put("ChargingBlocked", blocked);
-        }
+        if (!chargingBlocked.isEmpty()) tag.store("ChargingBlocked", UUIDUtil.CODEC.listOf(), List.copyOf(chargingBlocked));
         tag.put("ItemConfig", itemConfig.save());
         tag.put("FluidConfig", fluidConfig.save());
         tag.put("GasConfig", gasConfig.save());
         tag.put("HeatConfig", heatConfig.save());
-
-        ListTag mem = new ListTag();
-        for (GlobalPos gp : members) {
-            CompoundTag m = new CompoundTag();
-            m.putString("Dim", gp.dimension().location().toString());
-            m.putLong("Pos", gp.pos().asLong());
-            mem.add(m);
-        }
-        tag.put("Members", mem);
+        tag.store("Members", GlobalPos.CODEC.listOf(), List.copyOf(members));
 
         if (!playerPermissions.isEmpty()) {
             ListTag perms = new ListTag();
             for (var e : playerPermissions.entrySet()) {
                 CompoundTag p = new CompoundTag();
-                p.putUUID("Id", e.getKey());
+                p.store("Id", UUIDUtil.CODEC, e.getKey());
                 p.putString("Name", playerNames.getOrDefault(e.getKey(), ""));
                 p.putString("Role", e.getValue().name());
                 perms.add(p);
@@ -237,59 +216,35 @@ public class QuantumChannel {
     }
 
     public static QuantumChannel load(CompoundTag tag) {
-        UUID id = tag.getUUID("Id");
-        String name = tag.contains("Name") ? tag.getString("Name") : LEGACY_PREFIX + id.toString().substring(0, 8);
-        UUID owner = tag.hasUUID("OwnerId") ? tag.getUUID("OwnerId") : null;
-        String ownerName = tag.contains("OwnerName") ? tag.getString("OwnerName") : "";
-        QuantumChannel net = new QuantumChannel(id, name, owner, ownerName);
-        net.publicAccess = tag.getBoolean("Public");
-        net.chargingSlots = tag.getInt("ChargingSlots") & ChargingSlots.ALL_MASK;
-        if (tag.contains("Color")) net.color = tag.getInt("Color") | 0xFF000000;
-        if (tag.contains("Pin")) net.pin = tag.getString("Pin");
-        net.slotPriorityHand      = tag.getInt("SlotPrHand");
-        net.slotPriorityHotbar    = tag.getInt("SlotPrHotbar");
-        net.slotPriorityInventory = tag.getInt("SlotPrInv");
-        net.slotPriorityArmor     = tag.getInt("SlotPrArmor");
-        net.slotPriorityCurios    = tag.getInt("SlotPrCurios");
+        UUID id = tag.read("Id", UUIDUtil.CODEC).orElseGet(UUID::randomUUID);
+        UUID owner = tag.read("OwnerId", UUIDUtil.CODEC).orElse(null);
+        QuantumChannel net = new QuantumChannel(id, tag.getStringOr("Name", ""), owner, tag.getStringOr("OwnerName", ""));
+        net.publicAccess = tag.getBooleanOr("Public", false);
+        net.chargingSlots = tag.getIntOr("ChargingSlots", ChargingSlots.OFF) & ChargingSlots.ALL_MASK;
+        net.color = tag.getIntOr("Color", net.color) | 0xFF000000;
+        net.pin = tag.getStringOr("Pin", "");
+        net.slotPriorityHand      = tag.getIntOr("SlotPrHand", 0);
+        net.slotPriorityHotbar    = tag.getIntOr("SlotPrHotbar", 0);
+        net.slotPriorityInventory = tag.getIntOr("SlotPrInv", 0);
+        net.slotPriorityArmor     = tag.getIntOr("SlotPrArmor", 0);
+        net.slotPriorityCurios    = tag.getIntOr("SlotPrCurios", 0);
         for (int i = 0; i < 4; i++) {
-            net.armorPiecePriorities[i] = tag.getInt("SlotPrArmorPiece" + i);
+            net.armorPiecePriorities[i] = tag.getIntOr("SlotPrArmorPiece" + i, 0);
         }
-        if (tag.contains("ChargingBlocked", Tag.TAG_LIST)) {
-            ListTag blocked = tag.getList("ChargingBlocked", Tag.TAG_COMPOUND);
-            for (int i = 0; i < blocked.size(); i++) {
-                net.chargingBlocked.add(blocked.getCompound(i).getUUID("Id"));
-            }
-        }
-        if (tag.contains("ItemConfig", Tag.TAG_COMPOUND)) {
-            net.itemConfig.copyFrom(ItemChannelConfig.load(tag.getCompound("ItemConfig")));
-        }
-        if (tag.contains("FluidConfig", Tag.TAG_COMPOUND)) {
-            net.fluidConfig.copyFrom(FluidChannelConfig.load(tag.getCompound("FluidConfig")));
-        }
-        if (tag.contains("GasConfig", Tag.TAG_COMPOUND)) {
-            net.gasConfig.copyFrom(GasChannelConfig.load(tag.getCompound("GasConfig")));
-        }
-        if (tag.contains("HeatConfig", Tag.TAG_COMPOUND)) {
-            net.heatConfig.copyFrom(HeatChannelConfig.load(tag.getCompound("HeatConfig")));
-        }
+        tag.read("ChargingBlocked", UUIDUtil.CODEC.listOf()).ifPresent(net.chargingBlocked::addAll);
+        tag.getCompound("ItemConfig").ifPresent(t -> net.itemConfig.copyFrom(ItemChannelConfig.load(t)));
+        tag.getCompound("FluidConfig").ifPresent(t -> net.fluidConfig.copyFrom(FluidChannelConfig.load(t)));
+        tag.getCompound("GasConfig").ifPresent(t -> net.gasConfig.copyFrom(GasChannelConfig.load(t)));
+        tag.getCompound("HeatConfig").ifPresent(t -> net.heatConfig.copyFrom(HeatChannelConfig.load(t)));
+        tag.read("Members", GlobalPos.CODEC.listOf()).ifPresent(net.members::addAll);
 
-        ListTag mem = tag.getList("Members", Tag.TAG_COMPOUND);
-        for (int i = 0; i < mem.size(); i++) {
-            CompoundTag m = mem.getCompound(i);
-            ResourceKey<Level> dim = ResourceKey.create(Registries.DIMENSION, new ResourceLocation(m.getString("Dim")));
-            net.members.add(GlobalPos.of(dim, BlockPos.of(m.getLong("Pos"))));
-        }
-
-        if (tag.contains("Permissions", Tag.TAG_LIST)) {
-            ListTag perms = tag.getList("Permissions", Tag.TAG_COMPOUND);
-            for (int i = 0; i < perms.size(); i++) {
-                CompoundTag p = perms.getCompound(i);
-                UUID pid = p.getUUID("Id");
-                String pname = p.getString("Name");
-                Permission role = parseRole(p.getString("Role"));
-                net.playerPermissions.put(pid, role);
-                if (!pname.isEmpty()) net.playerNames.put(pid, pname);
-            }
+        for (Tag entry : tag.getListOrEmpty("Permissions")) {
+            if (!(entry instanceof CompoundTag p)) continue;
+            UUID pid = p.read("Id", UUIDUtil.CODEC).orElse(null);
+            if (pid == null) continue;
+            net.playerPermissions.put(pid, parseRole(p.getStringOr("Role", "")));
+            String pname = p.getStringOr("Name", "");
+            if (!pname.isEmpty()) net.playerNames.put(pid, pname);
         }
         return net;
     }

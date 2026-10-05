@@ -1,5 +1,6 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.api.IQuantumSubchannelView.Kind;
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import com.quantumchanneling.blockentity.PhotonManagerBlockEntity;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
@@ -426,7 +427,7 @@ public record ChannelInfo(
         int totalInFluids = 0, totalOutFluids = 0;
         int totalInGas = 0, totalOutGas = 0;
         for (GlobalPos gp : net.members()) {
-            String dim = gp.dimension().location().toString();
+            String dim = gp.dimension().identifier().toString();
             long packed = gp.pos().asLong();
             byte type = TYPE_UNKNOWN;
             int priority = 0, cap = ChannelBoundBlockEntity.DEFAULT_CAP, rate = 0;
@@ -456,18 +457,18 @@ public record ChannelInfo(
                     chunkLoaded = bound.isChunkLoadForced();
                     cap = bound.getThroughputCap();
                     customName = bound.getCustomName();
-                    subs.addAll(bound.getSubscribedSubchannels());
-                    fluidSubs.addAll(bound.getSubscribedFluidSubchannels());
-                    gasSubs.addAll(bound.getSubscribedGasSubchannels());
-                    itEn = bound.isItemsEnabled();
-                    flEn = bound.isFluidsEnabled();
-                    gaEn = bound.isGasEnabled();
-                    itemD  = bound.getItemDispatch();
-                    fluidD = bound.getFluidDispatch();
-                    gasD   = bound.getGasDispatch();
-                    itemMask  = (byte) bound.getItemSideMask();
-                    fluidMask = (byte) bound.getFluidSideMask();
-                    gasMask   = (byte) bound.getGasSideMask();
+                    subs.addAll(bound.getSubscriptions(Kind.ITEM));
+                    fluidSubs.addAll(bound.getSubscriptions(Kind.FLUID));
+                    gasSubs.addAll(bound.getSubscriptions(Kind.GAS));
+                    itEn = bound.isEnabled(Kind.ITEM);
+                    flEn = bound.isEnabled(Kind.FLUID);
+                    gaEn = bound.isEnabled(Kind.GAS);
+                    itemD  = bound.getDispatch(Kind.ITEM);
+                    fluidD = bound.getDispatch(Kind.FLUID);
+                    gasD   = bound.getDispatch(Kind.GAS);
+                    itemMask  = (byte) bound.getSideMask(Kind.ITEM);
+                    fluidMask = (byte) bound.getSideMask(Kind.FLUID);
+                    gasMask   = (byte) bound.getSideMask(Kind.GAS);
                     redMode   = (byte) bound.getRedstoneMode().ordinal();
                 }
                 if (be instanceof PhotonEmitterBlockEntity em) {
@@ -517,7 +518,7 @@ public record ChannelInfo(
                 pname = net.playerNames().getOrDefault(pid, "");
                 if (pname.isEmpty()) {
                     var live = server.getPlayerList().getPlayer(pid);
-                    if (live != null) pname = live.getGameProfile().getName();
+                    if (live != null) pname = live.getGameProfile().name();
                 }
             }
             // Stable order: highest FE/t at the top so the biggest sinks are obvious.

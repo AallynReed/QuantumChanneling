@@ -1,183 +1,119 @@
 package com.quantumchanneling.compat.jei;
 
 import com.quantumchanneling.client.PhotonNodeScreen;
+import com.quantumchanneling.compat.mekanism.ChemicalCompat;
 import mezz.jei.api.constants.VanillaTypes;
-import mezz.jei.api.forge.ForgeTypes;
 import mezz.jei.api.gui.handlers.IGhostIngredientHandler;
 import mezz.jei.api.ingredients.IIngredientType;
 import mezz.jei.api.ingredients.ITypedIngredient;
+import mezz.jei.api.neoforge.NeoForgeTypes;
+import mezz.jei.api.runtime.IIngredientManager;
 import net.minecraft.client.renderer.Rect2i;
 import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.material.Fluid;
 import net.minecraft.world.level.material.Fluids;
-import net.minecraftforge.fluids.FluidStack;
-import net.minecraftforge.fluids.FluidUtil;
+import net.neoforged.neoforge.fluids.FluidStack;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
+import java.util.function.IntFunction;
 
 /**
- * Ghost-ingredient handler for both the items and fluids filter grids on the Photon Node screen.
+ * Ghost-ingredient handler for the item, fluid and gas filter grids on the Photon Node screen.
  * Returns one {@link Target} per visible filter slot so JEI highlights them individually while the
- * user drags an ingredient.
- *
- * <p>The handler accepts:
+ * user drags an ingredient. Accepts:
  * <ul>
- *   <li><b>Items panel</b> — {@link VanillaTypes#ITEM_STACK} drags. Adds the item's registry id
- *       to the filter via {@link PhotonNodeScreen#acceptDroppedFilterItem}.</li>
- *   <li><b>Fluids panel</b> — {@link ForgeTypes#FLUID_STACK} drags AND item drags of containers
- *       that hold a fluid (filled buckets, mod tanks, capsules — any item exposing the fluid via
- *       {@link FluidUtil#getFluidContained}). The container's fluid id is used; the bucket item
- *       itself is never added to the filter.</li>
+ *   <li><b>Items</b> — item drags; the item's registry id goes into the filter.</li>
+ *   <li><b>Fluids</b> — fluid drags, and item drags of anything holding a fluid (buckets, tanks).
+ *       The container's fluid is used, never the container item itself.</li>
+ *   <li><b>Gas</b> — Mekanism chemical drags (identified through JEI's ingredient helper, so no
+ *       Mekanism types are needed), and filled chemical tanks or canisters.</li>
  * </ul>
  */
 public class PhotonNodeGhostHandler implements IGhostIngredientHandler<PhotonNodeScreen> {
+    private @Nullable IIngredientManager ingredients;
+
+    void setIngredientManager(@Nullable IIngredientManager ingredients) {
+        this.ingredients = ingredients;
+    }
 
     @Override
-    public <I> List<Target<I>> getTargetsTyped(PhotonNodeScreen screen,
-                                               ITypedIngredient<I> ingredient,
-                                               boolean doStart) {
+    public <I> List<Target<I>> getTargetsTyped(PhotonNodeScreen screen, ITypedIngredient<I> ingredient, boolean doStart) {
         IIngredientType<I> type = ingredient.getType();
         if (screen.isItemsModeActive() && type == VanillaTypes.ITEM_STACK) {
-            return buildItemTargets(screen);
+            return targets(screen.getItemsSlotCount(), screen::getItemsSlotRect, ing -> itemId(ing),
+                    screen::acceptDroppedFilterItem);
         }
         if (screen.isFluidsModeActive()) {
-            if (type == ForgeTypes.FLUID_STACK) return buildFluidTargets(screen);
-            if (type == VanillaTypes.ITEM_STACK) return buildFluidFromContainerTargets(screen);
+            if (type == NeoForgeTypes.FLUID_STACK) {
+                return targets(screen.getFluidsSlotCount(), screen::getFluidsSlotRect, ing -> fluidStackId(ing),
+                        screen::acceptDroppedFilterFluid);
+            }
+            if (type == VanillaTypes.ITEM_STACK) {
+                return targets(screen.getFluidsSlotCount(), screen::getFluidsSlotRect, ing -> containedFluidId(ing),
+                        screen::acceptDroppedFilterFluid);
+            }
         }
-        if (screen.isGasModeActive()) {
-            // Two paths: direct gas drag (Mekanism's JEI gas type) — caught by checking the
-            // ingredient's runtime class without importing Mekanism JEI's type registration; OR
-            // an item drag that's a filled Mekanism chemical tank / canister, read via the gas
-            // item cap.
-            if (type == VanillaTypes.ITEM_STACK) return buildGasFromContainerTargets(screen);
-            return buildGasTargetsForUnknownType(screen);
+        if (screen.isGasModeActive() && ChemicalCompat.isAvailable()) {
+            Function<I, Identifier> read = type == VanillaTypes.ITEM_STACK
+                    ? ing -> ing instanceof ItemStack stack ? ChemicalCompat.chemicalIn(stack) : null
+                    : ing -> chemicalId(type, ing);
+            return targets(screen.getGasesSlotCount(), screen::getGasesSlotRect, read, screen::acceptDroppedFilterGas);
         }
         return Collections.emptyList();
     }
 
-    private <I> List<Target<I>> buildItemTargets(PhotonNodeScreen screen) {
-        int n = screen.getItemsSlotCount();
-        List<Target<I>> targets = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            final int slotIdx = i;
-            Rect2i rect = screen.getItemsSlotRect(slotIdx);
+    private interface Drop {
+        void accept(Identifier id, int slot);
+    }
+
+    private static <I> List<Target<I>> targets(int count, IntFunction<@Nullable Rect2i> rects,
+                                               Function<I, @Nullable Identifier> read, Drop drop) {
+        List<Target<I>> out = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            int slot = i;
+            Rect2i rect = rects.apply(slot);
             if (rect == null) continue;
-            targets.add(new Target<>() {
+            out.add(new Target<>() {
                 @Override public Rect2i getArea() { return rect; }
-                @Override public void accept(I ing) {
-                    if (ing instanceof ItemStack stack && !stack.isEmpty()) {
-                        ResourceLocation id = BuiltInRegistries.ITEM.getKey(stack.getItem());
-                        screen.acceptDroppedFilterItem(id, slotIdx);
-                    }
+
+                @Override
+                public void accept(I ingredient) {
+                    Identifier id = read.apply(ingredient);
+                    if (id != null) drop.accept(id, slot);
                 }
             });
         }
-        return targets;
+        return out;
     }
 
-    private <I> List<Target<I>> buildFluidTargets(PhotonNodeScreen screen) {
-        int n = screen.getFluidsSlotCount();
-        List<Target<I>> targets = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            final int slotIdx = i;
-            Rect2i rect = screen.getFluidsSlotRect(slotIdx);
-            if (rect == null) continue;
-            targets.add(new Target<>() {
-                @Override public Rect2i getArea() { return rect; }
-                @Override public void accept(I ing) {
-                    if (ing instanceof FluidStack fs && !fs.isEmpty()) {
-                        ResourceLocation id = BuiltInRegistries.FLUID.getKey(fs.getFluid());
-                        if (id != null) screen.acceptDroppedFilterFluid(id, slotIdx);
-                    }
-                }
-            });
-        }
-        return targets;
+    private static @Nullable Identifier itemId(Object ingredient) {
+        return ingredient instanceof ItemStack stack && !stack.isEmpty()
+                ? BuiltInRegistries.ITEM.getKey(stack.getItem()) : null;
     }
 
-    private <I> List<Target<I>> buildFluidFromContainerTargets(PhotonNodeScreen screen) {
-        // Only offer slot targets when the dragged item ACTUALLY contains a fluid. Filtering out
-        // non-fluid items here means JEI won't highlight our slots for, say, a stick or a sword.
-        int n = screen.getFluidsSlotCount();
-        List<Target<I>> targets = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            final int slotIdx = i;
-            Rect2i rect = screen.getFluidsSlotRect(slotIdx);
-            if (rect == null) continue;
-            targets.add(new Target<>() {
-                @Override public Rect2i getArea() { return rect; }
-                @Override public void accept(I ing) {
-                    if (!(ing instanceof ItemStack stack) || stack.isEmpty()) return;
-                    Fluid fluid = fluidFromContainer(stack);
-                    if (fluid == null || fluid == Fluids.EMPTY) return;
-                    ResourceLocation id = BuiltInRegistries.FLUID.getKey(fluid);
-                    if (id != null) screen.acceptDroppedFilterFluid(id, slotIdx);
-                }
-            });
-        }
-        return targets;
+    private static @Nullable Identifier fluidStackId(Object ingredient) {
+        return ingredient instanceof FluidStack fs && !fs.isEmpty()
+                ? BuiltInRegistries.FLUID.getKey(fs.getFluid()) : null;
     }
 
-    private <I> List<Target<I>> buildGasFromContainerTargets(PhotonNodeScreen screen) {
-        int n = screen.getGasesSlotCount();
-        List<Target<I>> targets = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            final int slotIdx = i;
-            Rect2i rect = screen.getGasesSlotRect(slotIdx);
-            if (rect == null) continue;
-            targets.add(new Target<>() {
-                @Override public Rect2i getArea() { return rect; }
-                @Override public void accept(I ing) {
-                    if (!(ing instanceof ItemStack stack) || stack.isEmpty()) return;
-                    if (!com.quantumchanneling.client.Compat.mekanismLoaded()) return;
-                    ResourceLocation id = com.quantumchanneling.compat.mekanism.GasItemRead.read(stack);
-                    if (id != null) screen.acceptDroppedFilterGas(id, slotIdx);
-                }
-            });
-        }
-        return targets;
+    private static @Nullable Identifier containedFluidId(Object ingredient) {
+        if (!(ingredient instanceof ItemStack stack) || stack.isEmpty()) return null;
+        Fluid fluid = PhotonNodeScreen.fluidIn(stack);
+        return fluid == null || fluid == Fluids.EMPTY ? null : BuiltInRegistries.FLUID.getKey(fluid);
     }
 
-    /**
-     * Fallback target list for ingredients of unknown type — used when JEI hands us a Mekanism
-     * gas ingredient. We don't import Mekanism's JEI plugin types, so we accept by runtime
-     * instance check inside the callback.
-     */
-    private <I> List<Target<I>> buildGasTargetsForUnknownType(PhotonNodeScreen screen) {
-        if (!com.quantumchanneling.client.Compat.mekanismLoaded()) return Collections.emptyList();
-        int n = screen.getGasesSlotCount();
-        List<Target<I>> targets = new ArrayList<>(n);
-        for (int i = 0; i < n; i++) {
-            final int slotIdx = i;
-            Rect2i rect = screen.getGasesSlotRect(slotIdx);
-            if (rect == null) continue;
-            targets.add(new Target<>() {
-                @Override public Rect2i getArea() { return rect; }
-                @Override public void accept(I ing) {
-                    ResourceLocation id = com.quantumchanneling.compat.mekanism.GasIngredientRead.tryRead(ing);
-                    if (id != null) screen.acceptDroppedFilterGas(id, slotIdx);
-                }
-            });
-        }
-        return targets;
-    }
-
-    /**
-     * Pulls a {@link Fluid} out of a container ItemStack. Tries the standard Forge bucket path
-     * ({@link FluidUtil#getFluidContained}) first; that covers vanilla water/lava buckets, milk,
-     * potion-like fluid items, Mekanism Pressurized Tubes' creative tanks, etc.
-     */
-    private static Fluid fluidFromContainer(ItemStack stack) {
-        return FluidUtil.getFluidContained(stack)
-                .filter(fs -> !fs.isEmpty())
-                .map(FluidStack::getFluid)
-                .orElse(null);
+    private <I> @Nullable Identifier chemicalId(IIngredientType<I> type, I ingredient) {
+        if (ingredients == null) return null;
+        Identifier id = ingredients.getIngredientHelper(type).getIdentifier(ingredient);
+        return ChemicalCompat.isChemical(id) ? id : null;
     }
 
     @Override
-    public void onComplete() { /* no-op */ }
+    public void onComplete() {}
 }

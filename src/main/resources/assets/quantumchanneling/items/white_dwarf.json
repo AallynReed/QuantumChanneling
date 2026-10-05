@@ -1,0 +1,10 @@
+{
+  "model": {
+    "type": "minecraft:special",
+    "base": "quantumchanneling:item/white_dwarf",
+    "model": {
+      "type": "quantumchanneling:photon_effect",
+      "effect": "white_dwarf"
+    }
+  }
+}

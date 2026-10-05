@@ -1,4 +1,7 @@
-#version 150
+#version 330
+
+#moj_import <minecraft:dynamictransforms.glsl>
+#moj_import <minecraft:globals.glsl>
 
 // Lightning-bolt shader. The BER draws eight tubes per manager — one from the central orb to
 // each corner vault — and this shader paints a jagged strobing bolt along each tube's u axis.
@@ -21,9 +24,6 @@
 
 in vec4 vertexColor;
 in vec2 texCoord;
-
-uniform vec4 ColorModulator;
-uniform float GameTime;
 
 out vec4 fragColor;
 

@@ -1,6 +1,7 @@
 {
-  "__comment": "builtin/entity triggers Forge's BEWLR path → PhotonItemRenderer draws the halo + void shader with NO block model. The display transforms match the photon device items so the singularity sits centered in every context.",
-  "parent": "builtin/entity",
+  "textures": {
+    "particle": "quantumchanneling:item/uncontained_black_hole"
+  },
   "gui_light": "side",
   "display": {
     "gui": {

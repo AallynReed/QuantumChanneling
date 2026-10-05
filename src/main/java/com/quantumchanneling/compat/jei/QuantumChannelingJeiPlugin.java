@@ -6,8 +6,9 @@ import mezz.jei.api.IModPlugin;
 import mezz.jei.api.JeiPlugin;
 import mezz.jei.api.gui.handlers.IGuiContainerHandler;
 import mezz.jei.api.registration.IGuiHandlerRegistration;
+import mezz.jei.api.runtime.IJeiRuntime;
 import net.minecraft.client.renderer.Rect2i;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.util.List;
 
@@ -18,8 +19,8 @@ import java.util.List;
  *
  * <p>Registers two things on the Photon Node screen:
  * <ol>
- *   <li>A {@link PhotonNodeGhostHandler} so dragged items from JEI's ingredient list land in the
- *       items-mode filter grid.</li>
+ *   <li>A {@link PhotonNodeGhostHandler} so ingredients dragged from JEI's list land in the item,
+ *       fluid and gas filter grids.</li>
  *   <li>An {@link IGuiContainerHandler} that exposes the screen's extra protruding areas (the
  *       side-tab strip on the right and the left channel-info panel). JEI uses these to shift its
  *       ingredient column clear of our UI so the column doesn't disappear under our side tabs.</li>
@@ -28,22 +29,34 @@ import java.util.List;
 @JeiPlugin
 public class QuantumChannelingJeiPlugin implements IModPlugin {
 
-    private static final ResourceLocation UID =
-            new ResourceLocation(QuantumChanneling.MODID, "jei");
+    private static final Identifier UID =
+            Identifier.fromNamespaceAndPath(QuantumChanneling.MODID, "jei");
+
+    private final PhotonNodeGhostHandler ghostHandler = new PhotonNodeGhostHandler();
 
     @Override
-    public ResourceLocation getPluginUid() {
+    public Identifier getPluginUid() {
         return UID;
     }
 
     @Override
     public void registerGuiHandlers(IGuiHandlerRegistration registration) {
-        registration.addGhostIngredientHandler(PhotonNodeScreen.class, new PhotonNodeGhostHandler());
+        registration.addGhostIngredientHandler(PhotonNodeScreen.class, ghostHandler);
         registration.addGuiContainerHandler(PhotonNodeScreen.class, new IGuiContainerHandler<>() {
             @Override
             public List<Rect2i> getGuiExtraAreas(PhotonNodeScreen screen) {
                 return screen.getExtraGuiAreas();
             }
         });
+    }
+
+    @Override
+    public void onRuntimeAvailable(IJeiRuntime runtime) {
+        ghostHandler.setIngredientManager(runtime.getIngredientManager());
+    }
+
+    @Override
+    public void onRuntimeUnavailable() {
+        ghostHandler.setIngredientManager(null);
     }
 }

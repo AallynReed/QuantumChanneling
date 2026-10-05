@@ -1,4 +1,7 @@
-#version 150
+#version 330
+
+#moj_import <minecraft:dynamictransforms.glsl>
+#moj_import <minecraft:globals.glsl>
 
 // Phase-1 supernova flash. A white-hot core blooming into a white/gold light shell with a thin
 // bright shockwave ring near the outer edge and faint radial filaments. The macro expansion is
@@ -11,9 +14,6 @@
 
 in vec4 vertexColor;
 in vec2 texCoord;
-
-uniform vec4 ColorModulator;
-uniform float GameTime;
 
 out vec4 fragColor;
 

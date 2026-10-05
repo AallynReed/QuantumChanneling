@@ -1,7 +1,7 @@
 package com.quantumchanneling.client;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.network.chat.Component;
 
@@ -44,7 +44,7 @@ public class PhotonButton extends Button {
     }
 
     @Override
-    protected void renderWidget(GuiGraphics gfx, int mouseX, int mouseY, float partialTick) {
+    protected void extractContents(GuiGraphicsExtractor gfx, int mouseX, int mouseY, float partialTick) {
         int accent = accentSupplier.getAsInt();
         int x = getX(), y = getY(), w = getWidth(), h = getHeight();
         boolean hover = isHoveredOrFocused() && active;
@@ -84,7 +84,7 @@ public class PhotonButton extends Button {
         int textW = font.width(msg);
         int textX = x + (w - textW) / 2;
         int textY = y + (h - 8) / 2;
-        gfx.drawString(font, msg, textX, textY, textColor, false);
+        gfx.text(font, msg, textX, textY, textColor, false);
     }
 
     private static int blendARGB(int a, int b, float t) {

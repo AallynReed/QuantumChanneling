@@ -1,76 +1,69 @@
 package com.quantumchanneling.client.render;
 
+import com.mojang.blaze3d.pipeline.BlendFunction;
+import com.mojang.blaze3d.pipeline.ColorTargetState;
+import com.mojang.blaze3d.pipeline.DepthStencilState;
+import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.platform.CompareOp;
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vertex.VertexFormat;
 import com.quantumchanneling.QuantumChanneling;
-import net.minecraft.client.renderer.ShaderInstance;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraftforge.client.event.RegisterShadersEvent;
-import org.slf4j.Logger;
-import com.mojang.logging.LogUtils;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.neoforged.neoforge.client.event.RegisterRenderPipelinesEvent;
 
-import java.io.IOException;
+import java.util.List;
+import java.util.Optional;
 
 /**
- * Static holders + registration callbacks for the custom GLSL shaders used by the photon-glow
- * renderer. Two programs: {@code photon_void} (dark sphere, normal alpha blend) and
- * {@code photon_halo} (bright accretion-disk halo, additive blend). Both share the same vertex
- * shader.
+ * Render pipelines for the photon effects. Every program shares the {@code photon_glow} vertex
+ * shader (position + color + a 0..1 quad UV the fragment shader treats as a canvas) and reads only
+ * the standard uniform blocks: transforms, projection and globals ({@code GameTime}).
  *
- * <p>Held as plain static fields rather than {@link java.util.function.Supplier}s so the render
- * type's {@link net.minecraft.client.renderer.RenderStateShard.ShaderStateShard} can read them
- * directly per-frame without going through a lambda.
+ * <p>Depth policy:
+ * <ul>
+ *   <li>Halo, void, beam and white dwarf write depth, so block-entity renderers drawn later at the
+ *       same pixels (a chest lid, say) fail the depth test instead of painting over the effect.
+ *       Pixels the shader discards write nothing, so the claim is exactly the visible disc.</li>
+ *   <li>Gyroscope and bolts interleave in 3D — depth writes would let one ring or bolt cut holes
+ *       in another — so they only test depth.</li>
+ *   <li>The collapse burst passes are transient overlays: no depth test, no depth write.</li>
+ * </ul>
  */
 public final class PhotonShaders {
     private PhotonShaders() {}
 
-    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final DepthStencilState TEST_ONLY = new DepthStencilState(CompareOp.LESS_THAN_OR_EQUAL, false);
+    private static final DepthStencilState NONE = new DepthStencilState(CompareOp.ALWAYS_PASS, false);
 
-    public static ShaderInstance photonVoidShader;
-    public static ShaderInstance photonHaloShader;
-    public static ShaderInstance photonBeamShader;
-    public static ShaderInstance photonGyroscopeShader;
-    public static ShaderInstance photonBoltShader;
-    public static ShaderInstance photonImplosionShader;
-    public static ShaderInstance photonSupernovaShader;
-    public static ShaderInstance photonRefractionShader;
-    public static ShaderInstance photonWhiteDwarfShader;
+    public static final RenderPipeline HALO = pipeline("photon_halo", BlendFunction.LIGHTNING, DepthStencilState.DEFAULT);
+    public static final RenderPipeline VOID = pipeline("photon_void", BlendFunction.TRANSLUCENT, DepthStencilState.DEFAULT);
+    public static final RenderPipeline BEAM = pipeline("photon_beam", BlendFunction.LIGHTNING, DepthStencilState.DEFAULT);
+    public static final RenderPipeline GYROSCOPE = pipeline("photon_gyroscope", BlendFunction.LIGHTNING, TEST_ONLY);
+    public static final RenderPipeline BOLT = pipeline("photon_bolt", BlendFunction.LIGHTNING, TEST_ONLY);
+    public static final RenderPipeline SUPERNOVA = pipeline("photon_supernova", BlendFunction.LIGHTNING, NONE);
+    public static final RenderPipeline REFRACTION = pipeline("photon_refraction", BlendFunction.LIGHTNING, NONE);
+    /** Darkens the scene rather than brightening it, hence alpha blending. */
+    public static final RenderPipeline IMPLOSION = pipeline("photon_implosion", BlendFunction.TRANSLUCENT, NONE);
+    /** A sun is an opaque body: alpha blend so darker surface detail doesn't let the background through. */
+    public static final RenderPipeline WHITE_DWARF = pipeline("photon_white_dwarf", BlendFunction.TRANSLUCENT, DepthStencilState.DEFAULT);
 
-    /** Mod-event-bus listener — wires the shaders into Minecraft's shader registry on resource load.
-     *  Each program loads in isolation: a failure logs and leaves that field null so one broken
-     *  shader can't hard-crash the client (including F3+T reloads); the render types fall back to a
-     *  stock shader when a field is null. */
-    public static void register(RegisterShadersEvent event) {
-        load(event, "photon_void",       instance -> photonVoidShader = instance);
-        load(event, "photon_halo",       instance -> photonHaloShader = instance);
-        load(event, "photon_beam",       instance -> photonBeamShader = instance);
-        load(event, "photon_gyroscope",  instance -> photonGyroscopeShader = instance);
-        load(event, "photon_bolt",       instance -> photonBoltShader = instance);
-        load(event, "photon_implosion",  instance -> photonImplosionShader = instance);
-        load(event, "photon_supernova",  instance -> photonSupernovaShader = instance);
-        load(event, "photon_refraction", instance -> photonRefractionShader = instance);
-        load(event, "photon_white_dwarf", instance -> photonWhiteDwarfShader = instance);
+    private static final List<RenderPipeline> ALL =
+            List.of(HALO, VOID, BEAM, GYROSCOPE, BOLT, SUPERNOVA, REFRACTION, IMPLOSION, WHITE_DWARF);
+
+    private static RenderPipeline pipeline(String name, BlendFunction blend, DepthStencilState depth) {
+        return RenderPipeline.builder(RenderPipelines.MATRICES_PROJECTION_SNIPPET, RenderPipelines.GLOBALS_SNIPPET)
+                .withLocation(QuantumChanneling.id("pipeline/" + name))
+                .withVertexShader(QuantumChanneling.id("core/photon_glow"))
+                .withFragmentShader(QuantumChanneling.id("core/" + name))
+                .withVertexFormat(DefaultVertexFormat.POSITION_TEX_COLOR, VertexFormat.Mode.QUADS)
+                .withColorTargetState(new ColorTargetState(Optional.of(blend), ColorTargetState.WRITE_ALL))
+                .withDepthStencilState(depth)
+                .withCull(false)
+                .build();
     }
 
-    private static void load(RegisterShadersEvent event, String name,
-                             java.util.function.Consumer<ShaderInstance> sink) {
-        try {
-            event.registerShader(
-                    new ShaderInstance(event.getResourceProvider(),
-                            new ResourceLocation(QuantumChanneling.MODID, name),
-                            DefaultVertexFormat.POSITION_COLOR_TEX),
-                    sink::accept);
-        } catch (IOException | RuntimeException e) {
-            LOGGER.error("Failed to load Quantum Channeling photon shader '{}'; it will be disabled", name, e);
-        }
+    /** Mod-bus listener — precompiles the pipelines with the rest of the game's. */
+    public static void register(RegisterRenderPipelinesEvent event) {
+        ALL.forEach(event::registerPipeline);
     }
-
-    public static ShaderInstance getVoidShader()       { return photonVoidShader; }
-    public static ShaderInstance getHaloShader()       { return photonHaloShader; }
-    public static ShaderInstance getBeamShader()       { return photonBeamShader; }
-    public static ShaderInstance getGyroscopeShader()  { return photonGyroscopeShader; }
-    public static ShaderInstance getBoltShader()       { return photonBoltShader; }
-    public static ShaderInstance getImplosionShader()  { return photonImplosionShader; }
-    public static ShaderInstance getSupernovaShader()  { return photonSupernovaShader; }
-    public static ShaderInstance getRefractionShader() { return photonRefractionShader; }
-    public static ShaderInstance getWhiteDwarfShader() { return photonWhiteDwarfShader; }
 }

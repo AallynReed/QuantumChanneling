@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "#=#",
+    "=N=",
+    "#=#"
+  ],
+  "key": {
+    "#": "minecraft:diamond_block",
+    "=": "minecraft:netherite_ingot",
+    "N": "minecraft:nether_star"
+  },
+  "result": {
+    "id": "quantumchanneling:star_alloy_block"
+  }
+}

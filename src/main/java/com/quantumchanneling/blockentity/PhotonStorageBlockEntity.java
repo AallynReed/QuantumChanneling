@@ -3,66 +3,56 @@ package com.quantumchanneling.blockentity;
 import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.ServerConfig;
 import com.quantumchanneling.block.PhotonStorageBlock;
+import com.quantumchanneling.channel.JournaledInt;
+import com.quantumchanneling.channel.JournaledLong;
 import com.quantumchanneling.menu.PhotonNodeMenu;
-import com.quantumchanneling.channel.QuantumChannel;
-import com.quantumchanneling.channel.ChannelData;
 import net.minecraft.core.BlockPos;
-import net.minecraft.nbt.CompoundTag;
-import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.MenuProvider;
-import net.minecraft.world.entity.player.Inventory;
-import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.ContainerData;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraftforge.energy.IEnergyStorage;
-
-import java.util.UUID;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
+import net.neoforged.neoforge.transfer.transaction.TransactionContext;
 
 /**
- * Channel-bound battery. Holds an FE buffer that the network's emitters fill (via
- * {@link #acceptFromChannel}) and the wireless-charging system drains (via {@link #pullForExternal}).
+ * Channel-bound battery. Holds an FE buffer that the channel's emitters fill (via
+ * {@link #acceptFromChannel}) and receivers / wireless charging drain (via {@link #pullForExternal}).
  *
- * <p>Storage is intentionally NOT exposed as an {@link IEnergyStorage} capability to adjacent
- * blocks — energy only enters/exits via the channel. Because of that, the buffer can be a
- * {@code long} rather than the int-bounded {@code IEnergyStorage} contract: capacity is taken
- * from {@link Config#storageCapacities} and goes up to {@code Long.MAX_VALUE} (~9.2 quintillion FE).
- * Per-transaction amounts still arrive as {@code int} from the channel layer (push/pull is
- * bounded by Integer.MAX_VALUE per call), but cumulative {@code stored} can keep climbing.</p>
+ * <p>Storage is intentionally NOT exposed as an energy capability — energy only enters and leaves
+ * through the channel. That frees the buffer from the int-bounded handler contract: capacity comes
+ * from {@link ServerConfig#storageCapacities} and goes up to {@code Long.MAX_VALUE}. Individual
+ * transfers are still int-sized, but the stored total keeps climbing.
  *
- * <p>The block-state {@link PhotonStorageBlock#LEVEL} (0..8) is recomputed after every mutation so
- * the model can paint a visible fill bar that grows as the buffer fills.</p>
+ * <p>The block-state {@link PhotonStorageBlock#LEVEL} (0..8) follows every committed change so the
+ * model shows a fill bar.
  */
-public class PhotonStorageBlockEntity extends ChannelBoundBlockEntity implements MenuProvider {
+public class PhotonStorageBlockEntity extends ChannelBoundBlockEntity {
     /** Number of fill buckets exposed to the model — 0 empty, LEVEL_BUCKETS-1 full. */
     private static final int LEVEL_BUCKETS = 9;
 
     private final long capacity;
-    private long stored = 0;
+    private final JournaledLong stored = new JournaledLong(this::onStoredChanged);
     /**
-     * FE extracted this server tick — counted toward {@link #effectiveBudget(int)} so the device
-     * cap throttles output. Intake (acceptFromChannel) is intentionally uncounted: incoming energy
-     * is always uncapped, the cap only limits how fast the buffer drains.
+     * FE extracted this tick — counted toward {@link #effectiveBudget(int)} so the device cap
+     * throttles output. Intake is uncapped: the cap only limits how fast the buffer drains.
      */
-    private int extractedThisTick = 0;
-    private int lastTickExtracted = 0;
+    private final JournaledInt extracted = new JournaledInt();
 
     private final ContainerData containerData = new ContainerData() {
         @Override
         public int get(int index) {
+            long value = stored.get();
             return switch (index) {
-                // The screen reads DATA_THROUGHPUT as a 32-bit signed int. Storage may exceed that —
-                // clamp for display purposes (the actual buffer keeps the real value).
-                case PhotonNodeMenu.DATA_THROUGHPUT -> (int) Math.min(stored, Integer.MAX_VALUE);
+                // The screen reads DATA_THROUGHPUT as an int; the real buffer can exceed that.
+                case PhotonNodeMenu.DATA_THROUGHPUT -> (int) Math.min(value, Integer.MAX_VALUE);
                 case PhotonNodeMenu.DATA_CHUNK_LOADED -> isChunkLoadForced() ? 1 : 0;
                 case PhotonNodeMenu.DATA_CHANNEL_BOUND -> getChannelId() != null ? 1 : 0;
                 case PhotonNodeMenu.DATA_THROUGHPUT_CAP -> getThroughputCap();
                 case PhotonNodeMenu.DATA_PRIORITY -> getPriority();
                 case PhotonNodeMenu.DATA_SURGE -> isSurgeMode() ? 1 : 0;
-                // Split the long buffer into two ints for the client menu (which is int-based).
-                case PhotonNodeMenu.DATA_STORED_LOW -> (int) (stored & 0xFFFFFFFFL);
-                case PhotonNodeMenu.DATA_STORED_HIGH -> (int) (stored >>> 32);
+                // The long buffer travels as two ints.
+                case PhotonNodeMenu.DATA_STORED_LOW -> (int) (value & 0xFFFFFFFFL);
+                case PhotonNodeMenu.DATA_STORED_HIGH -> (int) (value >>> 32);
                 default -> 0;
             };
         }
@@ -74,108 +64,67 @@ public class PhotonStorageBlockEntity extends ChannelBoundBlockEntity implements
         super(QuantumChanneling.PHOTON_STORAGE_BE.get(), pos, state);
         int tier = state.getBlock() instanceof PhotonStorageBlock psb ? psb.getTier() : 1;
         long[] caps = ServerConfig.storageCapacities;
-        this.capacity = (caps != null && tier - 1 < caps.length) ? caps[tier - 1] : (1L << 16);
+        this.capacity = tier - 1 < caps.length ? caps[tier - 1] : 1L << 16;
     }
 
-    public long getStored() { return stored; }
+    public long getStored() { return stored.get(); }
     public long getCapacity() { return capacity; }
 
-    /** Channel-side push from an emitter. Returns the amount actually accepted (int-bounded). */
-    public int acceptFromChannel(int amount, boolean simulate) {
-        if (amount <= 0) return 0;
-        long room = capacity - stored;
-        if (room <= 0) return 0;
-        int actual = (int) Math.min((long) amount, room);
-        if (actual <= 0) return 0;
-        if (!simulate) {
-            stored += actual;
-            setChanged();
-            updateLevelState();
-        }
-        return actual;
+    /** Channel-side push from an emitter. Returns the amount accepted inside {@code tx}. */
+    public int acceptFromChannel(int amount, TransactionContext tx) {
+        int accepted = (int) Math.min(amount, capacity - stored.get());
+        if (accepted <= 0) return 0;
+        stored.add(accepted, tx);
+        return accepted;
     }
 
     /**
-     * Charging-side / receiver-side pull. Drains up to {@code want} FE from the buffer, capped by
-     * the device's per-tick output budget (which honors {@code throughputCap} and Overdrive).
+     * Receiver / charging-side draw of up to {@code want} FE, capped by the per-tick output budget
+     * (which honours the throughput cap and Overdrive).
      */
-    public int pullForExternal(int want) {
-        if (want <= 0) return 0;
-        // effectiveBudget(0) ⇒ if no per-device cap and no global default, returns MAX_VALUE.
-        // Overdrive (surgeMode) also returns MAX_VALUE — uncaps the drain rate.
-        int budget = effectiveBudget(0);
-        int room = Math.max(0, budget - extractedThisTick);
-        if (room <= 0) return 0;
-        int allowed = Math.min(want, room);
-        int actual = (int) Math.min((long) allowed, stored);
-        if (actual <= 0) return 0;
-        stored -= actual;
-        extractedThisTick += actual;
+    public int pullForExternal(int want, TransactionContext tx) {
+        int room = effectiveBudget(0) - extracted.get();
+        int taken = (int) Math.min(Math.min(want, room), stored.get());
+        if (taken <= 0) return 0;
+        stored.add(-taken, tx);
+        extracted.add(taken, tx);
+        return taken;
+    }
+
+    public void serverTick(ServerLevel level) {
+        extracted.reset();
+    }
+
+    private void onStoredChanged() {
         setChanged();
         updateLevelState();
-        return actual;
     }
 
-    /** FE drained from this storage during the previous server tick (for UI display). */
-    public int getLastTickExtracted() { return lastTickExtracted; }
-
-    /** Server-side tick — resets the per-tick extraction counter. Called by the block's ticker. */
-    public void serverTick(ServerLevel level) {
-        lastTickExtracted = extractedThisTick;
-        extractedThisTick = 0;
-    }
-
-    /**
-     * Writes the bucket index 0..LEVEL_BUCKETS-1 into the block state if it changed. Server-side
-     * only. Uses flag 2 so the block-state update is purely cosmetic — no neighbor wake.
-     */
+    /** Writes the 0..LEVEL_BUCKETS-1 fill bucket into the block state when it changed. Cosmetic only. */
     private void updateLevelState() {
-        if (level == null || level.isClientSide) return;
-        int newLevel = capacity <= 0 ? 0
-                : (int) Math.min(LEVEL_BUCKETS - 1, stored * LEVEL_BUCKETS / capacity);
+        if (level == null || level.isClientSide()) return;
+        int bucket = capacity <= 0 ? 0 : (int) Math.min(LEVEL_BUCKETS - 1, stored.get() * LEVEL_BUCKETS / capacity);
         BlockState s = getBlockState();
-        if (!(s.getBlock() instanceof PhotonStorageBlock)) return;
-        if (s.getValue(PhotonStorageBlock.LEVEL) != newLevel) {
-            level.setBlock(worldPosition, s.setValue(PhotonStorageBlock.LEVEL, newLevel), 2);
+        if (s.getBlock() instanceof PhotonStorageBlock && s.getValue(PhotonStorageBlock.LEVEL) != bucket) {
+            level.setBlock(worldPosition, s.setValue(PhotonStorageBlock.LEVEL, bucket), 2);
         }
     }
 
     @Override
-    public Component getDisplayName() { return getBlockState().getBlock().getName(); }
+    protected ContainerData menuData() { return containerData; }
 
     @Override
-    public AbstractContainerMenu createMenu(int id, Inventory inv, Player p) {
-        return new PhotonNodeMenu(id, inv, getBlockPos(), containerData,
-                getChannelId(), resolveChannelName(), resolveChannelOwner(), getCustomName(), capacity);
-    }
+    protected long menuStorageCapacity() { return capacity; }
 
-    public String resolveChannelName() {
-        UUID id = getChannelId();
-        if (id == null || !(level instanceof ServerLevel sl)) return "";
-        QuantumChannel net = ChannelData.get(sl.getServer()).getChannel(id);
-        return net == null ? "" : net.name();
-    }
-
-    public String resolveChannelOwner() {
-        UUID id = getChannelId();
-        if (id == null || !(level instanceof ServerLevel sl)) return "";
-        QuantumChannel net = ChannelData.get(sl.getServer()).getChannel(id);
-        return net == null ? "" : net.ownerName();
+    @Override
+    protected void saveAdditional(ValueOutput output) {
+        super.saveAdditional(output);
+        output.putLong("Energy", stored.get());
     }
 
     @Override
-    protected void saveAdditional(CompoundTag tag) {
-        super.saveAdditional(tag);
-        tag.putLong("Energy", stored);
-    }
-
-    @Override
-    public void load(CompoundTag tag) {
-        super.load(tag);
-        stored = tag.getLong("Energy");
-        if (stored < 0) stored = 0;
-        // Capacity isn't known at load() time before the constructor runs, so clamp lazily in
-        // accept/pull. (The constructor already ran by the time load() is invoked.)
-        if (stored > capacity) stored = capacity;
+    protected void loadAdditional(ValueInput input) {
+        super.loadAdditional(input);
+        stored.set(Math.clamp(input.getLongOr("Energy", 0L), 0L, capacity));
     }
 }

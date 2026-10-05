@@ -1,14 +1,22 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.QuantumChanneling;
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
+import net.minecraft.network.codec.StreamCodec;
+import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraftforge.network.NetworkEvent;
+import net.neoforged.neoforge.network.handling.IPayloadContext;
 
-import java.util.function.Supplier;
+public record ToggleChunkLoadPacket(BlockPos pos, boolean enabled) implements CustomPacketPayload {
+    public static final Type<ToggleChunkLoadPacket> TYPE = new Type<>(QuantumChanneling.id("toggle_chunk_load"));
+    public static final StreamCodec<FriendlyByteBuf, ToggleChunkLoadPacket> STREAM_CODEC =
+            StreamCodec.ofMember(ToggleChunkLoadPacket::encode, ToggleChunkLoadPacket::decode);
 
-public record ToggleChunkLoadPacket(BlockPos pos, boolean enabled) {
+    @Override
+    public Type<ToggleChunkLoadPacket> type() { return TYPE; }
+
 
     public static void encode(ToggleChunkLoadPacket pkt, FriendlyByteBuf buf) {
         buf.writeBlockPos(pkt.pos);
@@ -19,16 +27,11 @@ public record ToggleChunkLoadPacket(BlockPos pos, boolean enabled) {
         return new ToggleChunkLoadPacket(buf.readBlockPos(), buf.readBoolean());
     }
 
-    public static void handle(ToggleChunkLoadPacket pkt, Supplier<NetworkEvent.Context> ctxSup) {
-        NetworkEvent.Context ctx = ctxSup.get();
-        ctx.enqueueWork(() -> {
-            ServerPlayer player = ctx.getSender();
-            if (player == null) return;
-            ChannelBoundBlockEntity bound = PacketUtil.manageableDevice(player, pkt.pos);
-            if (bound != null) {
-                bound.setChunkLoadForced(pkt.enabled);
-            }
-        });
-        ctx.setPacketHandled(true);
+    public static void handle(ToggleChunkLoadPacket pkt, IPayloadContext ctx) {
+        if (!(ctx.player() instanceof ServerPlayer player)) return;
+        ChannelBoundBlockEntity bound = PacketUtil.manageableDevice(player, pkt.pos);
+        if (bound != null) {
+            bound.setChunkLoadForced(pkt.enabled);
+        }
     }
 }

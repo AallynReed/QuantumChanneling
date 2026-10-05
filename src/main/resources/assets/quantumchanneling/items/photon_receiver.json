@@ -1,0 +1,19 @@
+{
+  "model": {
+    "type": "minecraft:composite",
+    "models": [
+      {
+        "type": "minecraft:model",
+        "model": "quantumchanneling:item/photon_receiver"
+      },
+      {
+        "type": "minecraft:special",
+        "base": "quantumchanneling:item/photon_receiver",
+        "model": {
+          "type": "quantumchanneling:photon_effect",
+          "effect": "receiver"
+        }
+      }
+    ]
+  }
+}
