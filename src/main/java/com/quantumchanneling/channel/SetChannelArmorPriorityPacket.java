@@ -25,10 +25,12 @@ public record SetChannelArmorPriorityPacket(UUID channelId, int armorIdx, int pr
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
-            ChannelData data = ChannelData.get(player.serverLevel().getServer());
+            var server = player.serverLevel().getServer();
+            ChannelData data = ChannelData.get(server);
             if (data.setArmorPiecePriority(p.channelId, player.getUUID(), p.armorIdx, p.priority)) {
-                CreateChannelPacket.sendListBackTo(player);
+                CreateChannelPacket.broadcastListTo(server, p.channelId);
             }
+            CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);
     }

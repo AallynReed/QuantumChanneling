@@ -1,0 +1,17 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    " # ",
+    "#F#",
+    " f "
+  ],
+  "key": {
+    "#": { "item": "quantumchanneling:dyson_ring" },
+    "F": { "item": "quantumchanneling:uncontained_black_hole" },
+    "f": { "item": "quantumchanneling:photon_manager_container" }
+  },
+  "result": {
+    "item": "quantumchanneling:photon_manager",
+    "count": 1
+  }
+}

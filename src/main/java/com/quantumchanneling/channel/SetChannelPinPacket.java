@@ -21,10 +21,18 @@ public record SetChannelPinPacket(UUID channelId, String pin) {
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
-            ChannelData data = ChannelData.get(player.serverLevel().getServer());
+            var server = player.serverLevel().getServer();
+            ChannelData data = ChannelData.get(server);
+            // Clearing the PIN drops the channel off PIN-only viewers' screens — capture them first
+            // so they get an updated (channel-less) list even though broadcastListTo won't reach them.
+            java.util.List<ServerPlayer> before = server.getPlayerList().getPlayers().stream()
+                    .filter(pl -> data.visibleTo(pl).stream().anyMatch(n -> n.id().equals(p.channelId)))
+                    .toList();
             if (data.setPin(p.channelId, player.getUUID(), p.pin)) {
-                CreateChannelPacket.sendListBackTo(player);
+                CreateChannelPacket.broadcastListTo(server, p.channelId);
+                for (ServerPlayer pl : before) CreateChannelPacket.sendListBackTo(pl);
             }
+            CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);
     }

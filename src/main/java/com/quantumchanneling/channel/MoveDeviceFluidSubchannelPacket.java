@@ -1,10 +1,10 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.network.NetworkEvent;
 
 import java.util.UUID;
@@ -24,9 +24,9 @@ public record MoveDeviceFluidSubchannelPacket(BlockPos emitterPos, UUID subId, i
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
-            if (player == null || !PacketUtil.withinReach(player, p.emitterPos)) return;
-            BlockEntity be = player.level().getBlockEntity(p.emitterPos);
-            if (!(be instanceof PhotonEmitterBlockEntity em)) return;
+            if (player == null) return;
+            ChannelBoundBlockEntity dev = PacketUtil.manageableDevice(player, p.emitterPos);
+            if (!(dev instanceof PhotonEmitterBlockEntity em)) return;
             if (em.moveFluidSubchannel(p.subId, p.direction)) {
                 CreateChannelPacket.sendListBackTo(player);
             }

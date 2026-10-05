@@ -6,7 +6,7 @@ import net.minecraftforge.network.NetworkEvent;
 
 import java.util.function.Supplier;
 
-/** Client→server. Asks the server for the list of networks visible to this player. */
+/** Client→server. Asks the server for the list of channels visible to this player. */
 public record OpenChannelsRequestPacket() {
 
     public static void encode(OpenChannelsRequestPacket pkt, FriendlyByteBuf buf) {}

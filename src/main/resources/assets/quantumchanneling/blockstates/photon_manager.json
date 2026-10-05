@@ -1,5 +1,5 @@
 {
   "variants": {
-    "": { "model": "quantumchanneling:block/photon_manager_core" }
+    "": { "model": "quantumchanneling:block/photon_manager_core", "y": 270 }
   }
 }

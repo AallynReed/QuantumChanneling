@@ -31,7 +31,7 @@ import java.util.UUID;
  * Per-transaction amounts still arrive as {@code int} from the channel layer (push/pull is
  * bounded by Integer.MAX_VALUE per call), but cumulative {@code stored} can keep climbing.</p>
  *
- * <p>The block-state {@link PhotonStorageBlock#LEVEL} (0..4) is recomputed after every mutation so
+ * <p>The block-state {@link PhotonStorageBlock#LEVEL} (0..8) is recomputed after every mutation so
  * the model can paint a visible fill bar that grows as the buffer fills.</p>
  */
 public class PhotonStorageBlockEntity extends ChannelBoundBlockEntity implements MenuProvider {

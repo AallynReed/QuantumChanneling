@@ -181,9 +181,10 @@ public final class GasIntegration {
         if (targets.isEmpty()) return stack;
         if (emitter.getGasDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
                 && targets.size() > 1) {
+            // Advance only on EXECUTE; peek on SIMULATE so a routed batch moves the cursor once.
             int start = (action == Action.EXECUTE)
                     ? emitter.takeGasRoundRobinIndex(targets.size())
-                    : Math.floorMod(emitter.takeGasRoundRobinIndex(targets.size()) - 1, targets.size());
+                    : emitter.peekGasRoundRobinIndex(targets.size());
             List<PhotonReceiverBlockEntity> rotated = new ArrayList<>(targets.size());
             for (int i = 0; i < targets.size(); i++) rotated.add(targets.get((start + i) % targets.size()));
             targets = rotated;
@@ -220,10 +221,11 @@ public final class GasIntegration {
         var level = origin.getLevel();
         if (level == null) return stack;
         Direction[] sides = Direction.values();
-        int startIdx = (origin.getGasDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
-                && action == Action.EXECUTE)
-                ? origin.takeGasRoundRobinIndex(sides.length)
-                : 0;
+        int startIdx = 0;
+        if (origin.getGasDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN) {
+            startIdx = action == Action.EXECUTE ? origin.takeGasRoundRobinIndex(sides.length)
+                                                : origin.peekGasRoundRobinIndex(sides.length);
+        }
         GasStack remaining = stack.copy();
         for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
@@ -283,6 +285,8 @@ public final class GasIntegration {
                         GasStack taken = src.extractChemical(tank, wouldMove, Action.EXECUTE);
                         if (taken.isEmpty()) continue;
                         GasStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, Action.EXECUTE, neighborPos);
+                        // Return anything the receivers refused to the source tank — never destroy gas.
+                        if (!leftover.isEmpty()) src.insertChemical(tank, leftover, Action.EXECUTE);
                         long moved = taken.getAmount() - leftover.getAmount();
                         if (moved > 0) {
                             emitter.recordGasRouted((int) Math.min(moved, Integer.MAX_VALUE));

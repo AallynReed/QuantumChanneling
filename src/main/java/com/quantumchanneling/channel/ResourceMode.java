@@ -4,8 +4,8 @@ import net.minecraft.network.FriendlyByteBuf;
 
 /**
  * The kind of resource a channel device handles. ENERGY is the default — the original wireless-FE
- * pipeline. ITEMS is implemented (see {@link ItemChannelConfig}); FLUIDS and GASES are reserved
- * for future expansion and currently no-op on the server side.
+ * pipeline. ITEMS is implemented (see {@link ItemChannelConfig}); FLUIDS and GASES are implemented
+ * too, with GASES gated on Mekanism being present. Only HEAT remains a placeholder.
  */
 public enum ResourceMode {
     ENERGY, ITEMS, FLUIDS, GASES, HEAT;

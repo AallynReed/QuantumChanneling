@@ -294,12 +294,6 @@ public class QuantumChannel {
         return net;
     }
 
-    public static QuantumChannel fromLegacyChannel(UUID id, Set<GlobalPos> members) {
-        QuantumChannel net = new QuantumChannel(id, LEGACY_PREFIX + id.toString().substring(0, 8), null, "");
-        net.members.addAll(members);
-        return net;
-    }
-
     private static Permission parseRole(String s) {
         try { return Permission.valueOf(s); } catch (Exception e) { return Permission.USER; }
     }

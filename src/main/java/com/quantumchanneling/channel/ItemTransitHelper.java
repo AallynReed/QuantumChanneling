@@ -196,8 +196,10 @@ public final class ItemTransitHelper {
             PhotonEmitterBlockEntity emitter, List<PhotonReceiverBlockEntity> targets, boolean simulate) {
         if (targets.size() <= 1) return targets;
         if (emitter.getItemDispatch() != com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN) return targets;
+        // Peek on the SIMULATE pass and advance only on EXECUTE, so a routed batch (which runs both
+        // passes) moves the cursor exactly once and both passes agree on the receiver order.
         int start = simulate
-                ? Math.floorMod(emitter.takeItemRoundRobinIndex(targets.size()) - 1, targets.size())
+                ? emitter.peekItemRoundRobinIndex(targets.size())
                 : emitter.takeItemRoundRobinIndex(targets.size());
         List<PhotonReceiverBlockEntity> rotated = new ArrayList<>(targets.size());
         for (int i = 0; i < targets.size(); i++) rotated.add(targets.get((start + i) % targets.size()));
@@ -226,10 +228,11 @@ public final class ItemTransitHelper {
         var level = origin.getLevel();
         if (level == null) return stack;
         Direction[] sides = Direction.values();
-        int startIdx = (origin.getItemDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
-                && !simulate)
-                ? origin.takeItemRoundRobinIndex(sides.length)
-                : 0;
+        int startIdx = 0;
+        if (origin.getItemDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN) {
+            startIdx = simulate ? origin.peekItemRoundRobinIndex(sides.length)
+                                : origin.takeItemRoundRobinIndex(sides.length);
+        }
         ItemStack remaining = stack;
         for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
@@ -334,15 +337,10 @@ public final class ItemTransitHelper {
     static void fireRoutedEvent(PhotonEmitterBlockEntity emitter, ItemSubchannel sub,
                                 com.quantumchanneling.api.IQuantumSubchannelView.Kind kind, int amount) {
         try {
-            var view = com.quantumchanneling.api.QuantumChannelingAPI.deviceAt(
-                    (ServerLevel) emitter.getLevel(), emitter.getBlockPos()).orElse(null);
-            // The deviceAt() view exposes the subchannel via itemSubchannels(); find the entry that
-            // matches our id so the event carries the same view shape external mods see elsewhere.
-            com.quantumchanneling.api.IQuantumSubchannelView subView = null;
-            if (view != null) {
-                for (var s : view.itemSubchannels()) if (s.id().equals(sub.id())) { subView = s; break; }
-            }
-            if (subView == null) return;   // shouldn't happen, but a missed event is better than NPE
+            // Build the view straight off the routed subchannel — no deviceAt() allocation, no
+            // itemSubchannels() linear scan. Same event shape external mods see elsewhere.
+            com.quantumchanneling.api.IQuantumSubchannelView subView =
+                    com.quantumchanneling.api.QuantumChannelingAPI.viewOf(sub);
             net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(
                     new com.quantumchanneling.api.event.ChannelRoutedEvent(
                             emitter.getChannelId(), emitter.globalPos(), subView, kind, amount));

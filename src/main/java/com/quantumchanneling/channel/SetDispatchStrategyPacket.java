@@ -4,7 +4,6 @@ import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.network.NetworkEvent;
 
 import java.util.function.Supplier;
@@ -26,9 +25,9 @@ public record SetDispatchStrategyPacket(BlockPos pos, byte resource, byte strate
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
-            if (player == null || !PacketUtil.withinReach(player, p.pos)) return;
-            BlockEntity be = player.level().getBlockEntity(p.pos);
-            if (!(be instanceof ChannelBoundBlockEntity bound)) return;
+            if (player == null) return;
+            ChannelBoundBlockEntity bound = PacketUtil.manageableDevice(player, p.pos);
+            if (bound == null) return;
             DispatchStrategy s = DispatchStrategy.byOrdinal(p.strategy);
             switch (p.resource) {
                 case 0 -> bound.setItemDispatch(s);

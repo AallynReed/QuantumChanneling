@@ -40,12 +40,22 @@ public record SetChannelPermissionPacket(UUID channelId, String targetPlayerName
                 return;
             }
             UUID targetId = profile.get().getId();
+            // Snapshot the players who could see the channel before the change: a demotion/removal
+            // must reach a target who will no longer see it after and needs it dropped from their UI.
+            java.util.List<ServerPlayer> before = server.getPlayerList().getPlayers().stream()
+                    .filter(pl -> data.visibleTo(pl).stream().anyMatch(n -> n.id().equals(p.channelId)))
+                    .toList();
+            boolean changed;
             if (p.role.isEmpty()) {
-                data.removePermission(p.channelId, player.getUUID(), targetId);
+                changed = data.removePermission(p.channelId, player.getUUID(), targetId);
             } else {
                 Permission role;
                 try { role = Permission.valueOf(p.role); } catch (Exception e) { role = Permission.USER; }
-                data.setPermission(p.channelId, player.getUUID(), targetId, name, role);
+                changed = data.setPermission(p.channelId, player.getUUID(), targetId, name, role);
+            }
+            if (changed) {
+                CreateChannelPacket.broadcastListTo(server, p.channelId);
+                for (ServerPlayer pl : before) CreateChannelPacket.sendListBackTo(pl);
             }
             CreateChannelPacket.sendListBackTo(player);
         });

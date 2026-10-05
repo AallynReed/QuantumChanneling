@@ -100,6 +100,7 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     private final IEnergyStorage energyIO = new IEnergyStorage() {
         @Override
         public int receiveEnergy(int maxReceive, boolean simulate) {
+            if (!passesRedstoneGate()) return 0;
             int budget = effectiveBudget(ServerConfig.emitterPushRate);
             int cap = Math.max(0, budget - feForwardedThisTick);
             int amount = Math.min(maxReceive, cap);
@@ -224,6 +225,8 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         UUID id = UUID.randomUUID();
         itemSubchannels.put(id, new ItemSubchannel(id, n));
         bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.ITEM, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.CREATED);
         return id;
     }
 
@@ -236,6 +239,8 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         UUID id = UUID.randomUUID();
         fluidSubchannels.put(id, new FluidSubchannel(id, n));
         bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.FLUID, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.CREATED);
         return id;
     }
 
@@ -248,6 +253,8 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         UUID id = UUID.randomUUID();
         gasSubchannels.put(id, new GasSubchannel(id, n));
         bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.GAS, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.CREATED);
         return id;
     }
 
@@ -291,6 +298,22 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     private static String trim(String s) { return s == null ? "" : s.trim(); }
 
     /**
+     * Posts a {@link com.quantumchanneling.api.event.SubchannelChangedEvent} for a structural edit.
+     * Server-side only; wrapped so a listener can never crash the edit. Mirrors {@code fireMembership}.
+     */
+    private void fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind resource,
+                                       UUID subchannelId,
+                                       com.quantumchanneling.api.event.SubchannelChangedEvent.Kind change) {
+        if (!(level instanceof ServerLevel)) return;
+        UUID channelId = getChannelId();
+        try {
+            net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(
+                    new com.quantumchanneling.api.event.SubchannelChangedEvent(
+                            channelId, globalPos(), resource, subchannelId, change));
+        } catch (Throwable ignored) {}
+    }
+
+    /**
      * Removes a subchannel. The caller is responsible for telling subscribed receivers to drop
      * the dangling UUID — see {@link #sweepReceiverSubscriptionsForItemSubchannel(UUID)} and the
      * matching helpers below.
@@ -298,16 +321,22 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     public boolean deleteItemSubchannel(UUID id) {
         if (id == null || itemSubchannels.remove(id) == null) return false;
         bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.ITEM, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.DELETED);
         return true;
     }
     public boolean deleteFluidSubchannel(UUID id) {
         if (id == null || fluidSubchannels.remove(id) == null) return false;
         bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.FLUID, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.DELETED);
         return true;
     }
     public boolean deleteGasSubchannel(UUID id) {
         if (id == null || gasSubchannels.remove(id) == null) return false;
         bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.GAS, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.DELETED);
         return true;
     }
 
@@ -319,7 +348,10 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         for (ItemSubchannel other : itemSubchannels.values()) {
             if (other != s && other.name().equalsIgnoreCase(n)) return false;
         }
-        s.setName(n); bumpLocalEdit(); return true;
+        s.setName(n); bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.ITEM, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.RENAMED);
+        return true;
     }
     public boolean renameFluidSubchannel(UUID id, String name) {
         FluidSubchannel s = fluidSubchannels.get(id);
@@ -329,7 +361,10 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         for (FluidSubchannel other : fluidSubchannels.values()) {
             if (other != s && other.name().equalsIgnoreCase(n)) return false;
         }
-        s.setName(n); bumpLocalEdit(); return true;
+        s.setName(n); bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.FLUID, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.RENAMED);
+        return true;
     }
     public boolean renameGasSubchannel(UUID id, String name) {
         GasSubchannel s = gasSubchannels.get(id);
@@ -339,7 +374,10 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         for (GasSubchannel other : gasSubchannels.values()) {
             if (other != s && other.name().equalsIgnoreCase(n)) return false;
         }
-        s.setName(n); bumpLocalEdit(); return true;
+        s.setName(n); bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.GAS, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.RENAMED);
+        return true;
     }
 
     public boolean setItemSubchannelFilterMode(UUID id, boolean whitelist) {
@@ -500,23 +538,47 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
     public boolean setItemSubchannelColor(UUID id, int rgb) {
         ItemSubchannel s = itemSubchannels.get(id);
         if (s == null || s.color() == (rgb & 0xFFFFFF)) return false;
-        s.setColor(rgb); bumpLocalEdit(); return true;
+        s.setColor(rgb); bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.ITEM, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.RECOLORED);
+        return true;
     }
     public boolean setFluidSubchannelColor(UUID id, int rgb) {
         FluidSubchannel s = fluidSubchannels.get(id);
         if (s == null || s.color() == (rgb & 0xFFFFFF)) return false;
-        s.setColor(rgb); bumpLocalEdit(); return true;
+        s.setColor(rgb); bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.FLUID, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.RECOLORED);
+        return true;
     }
     public boolean setGasSubchannelColor(UUID id, int rgb) {
         GasSubchannel s = gasSubchannels.get(id);
         if (s == null || s.color() == (rgb & 0xFFFFFF)) return false;
-        s.setColor(rgb); bumpLocalEdit(); return true;
+        s.setColor(rgb); bumpLocalEdit();
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.GAS, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.RECOLORED);
+        return true;
     }
 
     /** Moves a subchannel up ({@code dir<0}) or down ({@code dir>0}) in iteration order. */
-    public boolean moveItemSubchannel(UUID id, int dir)  { return reorder(itemSubchannels, id, dir); }
-    public boolean moveFluidSubchannel(UUID id, int dir) { return reorder(fluidSubchannels, id, dir); }
-    public boolean moveGasSubchannel(UUID id, int dir)   { return reorder(gasSubchannels, id, dir); }
+    public boolean moveItemSubchannel(UUID id, int dir) {
+        if (!reorder(itemSubchannels, id, dir)) return false;
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.ITEM, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.REORDERED);
+        return true;
+    }
+    public boolean moveFluidSubchannel(UUID id, int dir) {
+        if (!reorder(fluidSubchannels, id, dir)) return false;
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.FLUID, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.REORDERED);
+        return true;
+    }
+    public boolean moveGasSubchannel(UUID id, int dir) {
+        if (!reorder(gasSubchannels, id, dir)) return false;
+        fireSubchannelChanged(com.quantumchanneling.api.IQuantumSubchannelView.Kind.GAS, id,
+                com.quantumchanneling.api.event.SubchannelChangedEvent.Kind.REORDERED);
+        return true;
+    }
 
     private <V> boolean reorder(LinkedHashMap<UUID, V> map, UUID id, int dir) {
         if (id == null || dir == 0 || !map.containsKey(id)) return false;
@@ -848,6 +910,8 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
      */
     public int pullForExternal(int want) {
         if (!(level instanceof ServerLevel) || want <= 0) return 0;
+        // A redstone-disabled emitter surrenders nothing — not to the channel, not to charging.
+        if (!passesRedstoneGate()) return 0;
         int budget = effectiveBudget(ServerConfig.emitterPushRate) - feForwardedThisTick;
         if (budget <= 0) return 0;
         int target = Math.min(want, budget);
@@ -905,20 +969,27 @@ public class PhotonEmitterBlockEntity extends ChannelBoundBlockEntity implements
         // no static-field reads inside the method body, nothing.
         if (com.quantumchanneling.client.Compat.mekanismLoaded()) tickGasAndHeat(level);
 
-        int budget = effectiveBudget(ServerConfig.emitterPushRate);
-        for (Direction side : Direction.values()) {
-            int rem = budget - feForwardedThisTick;
-            if (rem <= 0) break;
-            BlockEntity neighbor = level.getBlockEntity(worldPosition.relative(side));
-            if (neighbor == null) continue;
-            IEnergyStorage source = neighbor.getCapability(ForgeCapabilities.ENERGY, side.getOpposite()).orElse(null);
-            if (source == null || !source.canExtract()) continue;
-            int simulated = source.extractEnergy(rem, true);
-            if (simulated <= 0) continue;
-            int forwarded = forwardToChannel(simulated, false);
-            if (forwarded <= 0) continue;
-            source.extractEnergy(forwarded, false);
-            feForwardedThisTick += forwarded;
+        // Active FE pull mirrors the item/fluid/gas paths in honoring the redstone gate.
+        if (passesRedstoneGate()) {
+            int budget = effectiveBudget(ServerConfig.emitterPushRate);
+            for (Direction side : Direction.values()) {
+                int rem = budget - feForwardedThisTick;
+                if (rem <= 0) break;
+                BlockEntity neighbor = level.getBlockEntity(worldPosition.relative(side));
+                if (neighbor == null) continue;
+                IEnergyStorage source = neighbor.getCapability(ForgeCapabilities.ENERGY, side.getOpposite()).orElse(null);
+                if (source == null || !source.canExtract()) continue;
+                // Forward first (the commit into receivers), then extract exactly what the channel
+                // took. Since we only ever pull the forwarded amount, an unaccepted remainder is
+                // never extracted from the source — so nothing has to be handed back, which matters
+                // because most adjacent sources are generators that canExtract but not canReceive.
+                int available = source.extractEnergy(rem, true);
+                if (available <= 0) continue;
+                int forwarded = forwardToChannel(available, false);
+                if (forwarded <= 0) continue;
+                source.extractEnergy(forwarded, false);
+                feForwardedThisTick += forwarded;
+            }
         }
     }
 

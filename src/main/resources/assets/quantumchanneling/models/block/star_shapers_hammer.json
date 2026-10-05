@@ -1,0 +1,49 @@
+{
+  "__comment": "Placeholder hammer silhouette — wide head + narrow neck + wide base. Mirrors the crafting recipe pattern (### / I / III) so the in-world block matches the recipe shape.",
+  "parent": "block/block",
+  "textures": {
+    "all":      "quantumchanneling:block/star_shapers_hammer",
+    "particle": "quantumchanneling:block/star_shapers_hammer"
+  },
+  "elements": [
+    {
+      "__comment": "Base — wide slab on the ground.",
+      "from": [2, 0, 5],
+      "to":   [14, 4, 11],
+      "faces": {
+        "down":  { "uv": [2, 5, 14, 11], "texture": "#all", "cullface": "down" },
+        "up":    { "uv": [2, 5, 14, 11], "texture": "#all" },
+        "north": { "uv": [2, 12, 14, 16], "texture": "#all" },
+        "south": { "uv": [2, 12, 14, 16], "texture": "#all" },
+        "east":  { "uv": [5, 12, 11, 16], "texture": "#all" },
+        "west":  { "uv": [5, 12, 11, 16], "texture": "#all" }
+      }
+    },
+    {
+      "__comment": "Neck — narrow stem connecting the head to the base.",
+      "from": [6, 4, 6],
+      "to":   [10, 12, 10],
+      "faces": {
+        "down":  { "uv": [6, 6, 10, 10], "texture": "#all" },
+        "up":    { "uv": [6, 6, 10, 10], "texture": "#all" },
+        "north": { "uv": [6, 4, 10, 12], "texture": "#all" },
+        "south": { "uv": [6, 4, 10, 12], "texture": "#all" },
+        "east":  { "uv": [6, 4, 10, 12], "texture": "#all" },
+        "west":  { "uv": [6, 4, 10, 12], "texture": "#all" }
+      }
+    },
+    {
+      "__comment": "Head — wide slab on top, mirrors the base.",
+      "from": [2, 12, 5],
+      "to":   [14, 16, 11],
+      "faces": {
+        "down":  { "uv": [2, 5, 14, 11], "texture": "#all" },
+        "up":    { "uv": [2, 5, 14, 11], "texture": "#all", "cullface": "up" },
+        "north": { "uv": [2, 0, 14, 4], "texture": "#all" },
+        "south": { "uv": [2, 0, 14, 4], "texture": "#all" },
+        "east":  { "uv": [5, 0, 11, 4], "texture": "#all" },
+        "west":  { "uv": [5, 0, 11, 4], "texture": "#all" }
+      }
+    }
+  ]
+}

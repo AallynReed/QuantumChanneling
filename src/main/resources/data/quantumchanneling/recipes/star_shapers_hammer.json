@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "###",
+    " I ",
+    "III"
+  ],
+  "key": {
+    "#": { "item": "quantumchanneling:star_alloy_block" },
+    "I": { "item": "minecraft:iron_block" }
+  },
+  "result": {
+    "item": "quantumchanneling:star_shapers_hammer",
+    "count": 1
+  }
+}

@@ -7,7 +7,6 @@ import com.quantumchanneling.block.PhotonShape;
 import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import com.quantumchanneling.blockentity.PhotonManagerBlockEntity;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.blockentity.BlockEntityRenderer;
 import net.minecraft.client.renderer.blockentity.BlockEntityRendererProvider;
@@ -108,7 +107,7 @@ public class PhotonNodeRenderer<T extends ChannelBoundBlockEntity> implements Bl
 
         // ---- accretion halo (custom additive shader) ----
         VertexConsumer halo = buffer.getBuffer(PhotonRenderTypes.PHOTON_HALO);
-        drawShadedBillboard(pose, halo, HALO_QUAD_HALF, r, g, b, 255, 0.0f);
+        drawOrb(pose, halo, HALO_QUAD_HALF, r, g, b, 255);
 
         // ---- beams (custom additive shader) ----
         // Manager and storage devices are network-control / battery roles — they don't route a
@@ -155,39 +154,23 @@ public class PhotonNodeRenderer<T extends ChannelBoundBlockEntity> implements Bl
         int voidG = clampByte((int) (g * 0.10f) + 4);
         int voidB = clampByte((int) (b * 0.10f) + 6);
         VertexConsumer dark = buffer.getBuffer(PhotonRenderTypes.PHOTON_VOID);
-        // Pull the void quad slightly toward the camera so its depth is deterministically less
-        // than the halo's. Without this bias the two billboards have nearly-identical depth and
-        // LEQUAL flips at random with floating-point noise as the camera moves, producing the
-        // "static" flicker on the dark center. Local +Z after mulPose(cameraOrientation) points
-        // into the scene (away from camera), so we use a NEGATIVE bias to pull toward the viewer.
-        // -0.003 is enough to win the test every frame without visibly shifting the screen
-        // position of the void.
-        drawShadedBillboard(pose, dark, VOID_QUAD_HALF, voidR, voidG, voidB, 255, -0.003f);
+        // Small toward-camera bias so the coplanar void wins the depth test over the halo.
+        drawOrb(pose, dark, VOID_QUAD_HALF, voidR, voidG, voidB, 255, 0.003f);
 
         pose.popPose();
     }
 
-    /**
-     * Camera-facing quad with UV (0,0)..(1,1) corners. The bound shader does all visual work.
-     * {@code depthBias} translates the quad along local +Z after the camera rotation — in
-     * Minecraft's PoseStack the local +Z after {@code mulPose(cameraOrientation)} points back
-     * toward the viewer, so positive values pull the quad closer to the camera and produce a
-     * smaller depth value. Used to break ties between coplanar billboards.
-     */
-    private static void drawShadedBillboard(PoseStack pose, VertexConsumer vc, float halfSize,
-                                            int red, int green, int blue, int alpha, float depthBias) {
-        pose.pushPose();
-        Quaternionf cam = Minecraft.getInstance().getEntityRenderDispatcher().cameraOrientation();
-        pose.mulPose(cam);
-        if (depthBias != 0.0f) pose.translate(0.0f, 0.0f, depthBias);
+    /** Emits a camera-facing {@link PhotonOrb} billboard at the current pose center. The facing is
+     *  derived from the modelview matrix, so it works in the world and in the inventory alike. */
+    private static void drawOrb(PoseStack pose, VertexConsumer vc, float half,
+                                int red, int green, int blue, int alpha) {
+        drawOrb(pose, vc, half, red, green, blue, alpha, 0.0f);
+    }
+
+    private static void drawOrb(PoseStack pose, VertexConsumer vc, float half,
+                                int red, int green, int blue, int alpha, float depthBias) {
         Matrix4f m = pose.last().pose();
-
-        vc.vertex(m, -halfSize, -halfSize, 0).color(red, green, blue, alpha).uv(0.0f, 0.0f).endVertex();
-        vc.vertex(m,  halfSize, -halfSize, 0).color(red, green, blue, alpha).uv(1.0f, 0.0f).endVertex();
-        vc.vertex(m,  halfSize,  halfSize, 0).color(red, green, blue, alpha).uv(1.0f, 1.0f).endVertex();
-        vc.vertex(m, -halfSize,  halfSize, 0).color(red, green, blue, alpha).uv(0.0f, 1.0f).endVertex();
-
-        pose.popPose();
+        PhotonOrb.draw(m, vc, half, red, green, blue, alpha, depthBias);
     }
 
     private static int clampByte(int v) { return Math.max(0, Math.min(255, v)); }

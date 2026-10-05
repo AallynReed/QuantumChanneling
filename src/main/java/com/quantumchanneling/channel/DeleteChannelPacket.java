@@ -22,8 +22,16 @@ public record DeleteChannelPacket(UUID id) {
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
-            ChannelData data = ChannelData.get(player.serverLevel().getServer());
-            data.deleteChannel(pkt.id, player.getUUID());
+            var server = player.serverLevel().getServer();
+            ChannelData data = ChannelData.get(server);
+            // Capture everyone who can see the channel BEFORE it's gone, so we can resync them
+            // afterward and let the deleted channel drop off their screens.
+            java.util.List<ServerPlayer> viewers = server.getPlayerList().getPlayers().stream()
+                    .filter(pl -> data.visibleTo(pl).stream().anyMatch(n -> n.id().equals(pkt.id)))
+                    .toList();
+            if (data.deleteChannel(pkt.id, player.getUUID())) {
+                for (ServerPlayer pl : viewers) CreateChannelPacket.sendListBackTo(pl);
+            }
             CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);

@@ -76,13 +76,17 @@ public class PhotonNodeMenu extends AbstractContainerMenu {
                           String deviceName, long storageCapacity) {
         super(QuantumChanneling.PHOTON_NODE_MENU.get(), containerId);
         this.pos = pos;
-        this.data = data;
+        // Split each logical int across two 16-bit data slots so values above 32767 survive the
+        // short-based data-slot sync. Client and server both hold the doubled physical view.
+        this.data = new SplitContainerData(data);
         this.boundChannelId = boundChannelId;
         this.channelName = channelName == null ? "" : channelName;
         this.channelOwner = channelOwner == null ? "" : channelOwner;
         this.deviceName = deviceName == null ? "" : deviceName;
         this.storageCapacity = storageCapacity;
-        addDataSlots(data);
+        // Register the SPLIT view (2*DATA_SIZE 16-bit half-slots), not the raw logical data — that's
+        // what carries values above 32767 through the short-based data-slot sync intact.
+        addDataSlots(this.data);
         addPlayerInventorySlots(inv);
     }
 
@@ -116,12 +120,20 @@ public class PhotonNodeMenu extends AbstractContainerMenu {
     }
 
     public BlockPos getBlockPos() { return pos; }
+
+    /** Recombines a logical value from its two 16-bit physical halves (see {@link SplitContainerData}). */
+    private int v(int logical) {
+        int lo = data.get(logical * 2) & 0xFFFF;
+        int hi = data.get(logical * 2 + 1) & 0xFFFF;
+        return lo | (hi << 16);
+    }
+
     /** Energy throughput last tick (FE/t). Use {@link #getThroughputFor(com.quantumchanneling.channel.ResourceMode)}
      *  on screens that need to follow the active mode. */
-    public int getThroughput() { return data.get(DATA_THROUGHPUT); }
-    public int getThroughputItems()  { return data.get(DATA_THROUGHPUT_ITEMS); }
-    public int getThroughputFluids() { return data.get(DATA_THROUGHPUT_FLUIDS); }
-    public int getThroughputGas()    { return data.get(DATA_THROUGHPUT_GAS); }
+    public int getThroughput() { return v(DATA_THROUGHPUT); }
+    public int getThroughputItems()  { return v(DATA_THROUGHPUT_ITEMS); }
+    public int getThroughputFluids() { return v(DATA_THROUGHPUT_FLUIDS); }
+    public int getThroughputGas()    { return v(DATA_THROUGHPUT_GAS); }
     /** Returns the per-tick throughput in the unit that matches {@code mode}. ENERGY → FE/t,
      *  ITEMS → stacks/t, FLUIDS / GASES → mB/t. HEAT returns 0 (not wired). */
     public int getThroughputFor(com.quantumchanneling.channel.ResourceMode mode) {
@@ -135,15 +147,15 @@ public class PhotonNodeMenu extends AbstractContainerMenu {
     }
     /** True when the emitter detected a routing loop recently (push target == pull source on the
      *  same channel). Receivers always return false. */
-    public boolean isLoopWarning() { return data.get(DATA_LOOP_WARNING) != 0; }
-    public boolean isChunkLoaded() { return data.get(DATA_CHUNK_LOADED) != 0; }
-    public boolean isChannelBound() { return data.get(DATA_CHANNEL_BOUND) != 0; }
-    public int getThroughputCap() { return data.get(DATA_THROUGHPUT_CAP); }
-    public int getPriority() { return data.get(DATA_PRIORITY); }
-    public boolean isSurge() { return data.get(DATA_SURGE) != 0; }
-    public int getAvg1Min() { return data.get(DATA_AVG_1MIN); }
-    public int getAvg5Min() { return data.get(DATA_AVG_5MIN); }
-    public int getAvg10Min() { return data.get(DATA_AVG_10MIN); }
+    public boolean isLoopWarning() { return v(DATA_LOOP_WARNING) != 0; }
+    public boolean isChunkLoaded() { return v(DATA_CHUNK_LOADED) != 0; }
+    public boolean isChannelBound() { return v(DATA_CHANNEL_BOUND) != 0; }
+    public int getThroughputCap() { return v(DATA_THROUGHPUT_CAP); }
+    public int getPriority() { return v(DATA_PRIORITY); }
+    public boolean isSurge() { return v(DATA_SURGE) != 0; }
+    public int getAvg1Min() { return v(DATA_AVG_1MIN); }
+    public int getAvg5Min() { return v(DATA_AVG_5MIN); }
+    public int getAvg10Min() { return v(DATA_AVG_10MIN); }
     /** Reads one of the 30 buckets for the chosen window. {@code windowMinutes} = 1, 5, or 10. */
     public int getGraphBucket(int windowMinutes, int bucketIdx) {
         if (bucketIdx < 0 || bucketIdx >= GRAPH_BUCKETS) return 0;
@@ -153,12 +165,12 @@ public class PhotonNodeMenu extends AbstractContainerMenu {
             case 10 -> DATA_GRAPH_10M_BASE;
             default -> DATA_GRAPH_10M_BASE;
         };
-        return data.get(base + bucketIdx);
+        return v(base + bucketIdx);
     }
     /** Returns the storage stored amount in FE (reassembled long). Zero for non-storage devices. */
     public long getStoredLong() {
-        long low = data.get(DATA_STORED_LOW) & 0xFFFFFFFFL;
-        long high = ((long) data.get(DATA_STORED_HIGH)) << 32;
+        long low = v(DATA_STORED_LOW) & 0xFFFFFFFFL;
+        long high = ((long) v(DATA_STORED_HIGH)) << 32;
         return high | low;
     }
     public long getStorageCapacity() { return storageCapacity; }

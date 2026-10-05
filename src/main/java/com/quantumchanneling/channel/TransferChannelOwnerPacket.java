@@ -22,10 +22,12 @@ public record TransferChannelOwnerPacket(UUID channelId, UUID targetPlayerId, St
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
-            ChannelData data = ChannelData.get(player.serverLevel().getServer());
+            var server = player.serverLevel().getServer();
+            ChannelData data = ChannelData.get(server);
             if (data.transferOwnership(p.channelId, player.getUUID(), p.targetPlayerId, p.targetName)) {
-                CreateChannelPacket.sendListBackTo(player);
+                CreateChannelPacket.broadcastListTo(server, p.channelId);
             }
+            CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);
     }

@@ -255,6 +255,12 @@ public final class ModMessages {
         CHANNEL.messageBuilder(PingDevicePacket.class, id++, NetworkDirection.PLAY_TO_SERVER)
                 .encoder(PingDevicePacket::encode).decoder(PingDevicePacket::decode)
                 .consumerMainThread(PingDevicePacket::handle).add();
+
+        // Star Shaper's Hammer crushing a White Dwarf — server tells nearby clients to play the
+        // shader-driven expanding light burst.
+        CHANNEL.messageBuilder(LightBurstPacket.class, id++, NetworkDirection.PLAY_TO_CLIENT)
+                .encoder(LightBurstPacket::encode).decoder(LightBurstPacket::decode)
+                .consumerMainThread(LightBurstPacket::handle).add();
     }
 
     public static void sendToServer(Object msg) { CHANNEL.sendToServer(msg); }

@@ -293,35 +293,23 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
     }
 
     /**
-     * Computes what the adjacent FE sinks would still accept this tick (clamped by remaining
-     * budget), then pulls that much from any {@link PhotonStorageBlockEntity} loaded on the
-     * channel and runs it through {@link #acceptAndForward}.
+     * Tops up adjacent machines from channel storage when emitter input alone wasn't enough. Sizes
+     * the storage draw by a simulated forward so buffered FE is never drained and then dropped — the
+     * simulate and execute passes scan the same sinks back-to-back, so they agree on the amount.
      */
     private void pullFromChannelStorageAndForward(ServerLevel level) {
         UUID channelId = getChannelId();
         if (channelId == null) return;
+        // Gate the whole energy path on redstone — bail before pulling so storage isn't drained
+        // into a device that can't forward it this tick.
+        if (!passesRedstoneGate()) return;
         int budget = effectiveBudget(ServerConfig.receiverOutputRate);
         int room = Math.max(0, budget - feForwardedThisTick);
         if (room <= 0) return;
-        int demand = simulateAdjacentDemand(level, room);
-        if (demand <= 0) return;
-        int pulled = pullFromChannelStorage(level, demand);
+        int deliverable = acceptAndForward(room, true);
+        if (deliverable <= 0) return;
+        int pulled = pullFromChannelStorage(level, deliverable);
         if (pulled > 0) acceptAndForward(pulled, false);
-    }
-
-    /** Sum of FE the 6 neighbours would accept this tick (capped at {@code maxAmount}). */
-    private int simulateAdjacentDemand(ServerLevel level, int maxAmount) {
-        int total = 0;
-        for (Direction side : Direction.values()) {
-            if (total >= maxAmount) break;
-            BlockEntity neighbor = level.getBlockEntity(worldPosition.relative(side));
-            if (neighbor == null) continue;
-            IEnergyStorage sink = neighbor.getCapability(ForgeCapabilities.ENERGY, side.getOpposite()).orElse(null);
-            if (sink == null || !sink.canReceive()) continue;
-            int can = sink.receiveEnergy(maxAmount - total, true);
-            if (can > 0) total += can;
-        }
-        return total;
     }
 
     /** Drain up to {@code want} FE from any loaded Photon Storage on this channel. */
@@ -345,6 +333,7 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
     }
 
     public int acceptAndForward(int amount, boolean simulate) {
+        if (!passesRedstoneGate()) return 0;
         int budget = effectiveBudget(ServerConfig.receiverOutputRate);
         int cap = Math.max(0, budget - feForwardedThisTick);
         int b = Math.min(amount, cap);
@@ -356,6 +345,8 @@ public class PhotonReceiverBlockEntity extends ChannelBoundBlockEntity implement
             if (b <= 0) break;
             BlockEntity neighbor = server.getBlockEntity(worldPosition.relative(side));
             if (neighbor == null) continue;
+            // Skip sibling Quantum devices — energy routes through the channel, never device-to-device.
+            if (neighbor instanceof ChannelBoundBlockEntity) continue;
             IEnergyStorage sink = neighbor.getCapability(ForgeCapabilities.ENERGY, side.getOpposite()).orElse(null);
             if (sink == null || !sink.canReceive()) continue;
             int simulated = sink.receiveEnergy(b, true);

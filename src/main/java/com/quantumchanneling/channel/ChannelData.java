@@ -3,20 +3,15 @@ package com.quantumchanneling.channel;
 import com.quantumchanneling.blockentity.PhotonManagerBlockEntity;
 import com.quantumchanneling.blockentity.PhotonEmitterBlockEntity;
 import com.quantumchanneling.blockentity.PhotonStorageBlockEntity;
-import net.minecraft.core.BlockPos;
 import net.minecraft.core.GlobalPos;
-import net.minecraft.core.registries.Registries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
-import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraftforge.common.capabilities.ForgeCapabilities;
@@ -122,6 +117,11 @@ public class ChannelData extends SavedData {
         QuantumChannel net = networks.get(id);
         if (net == null || !net.canManage(actor)) return false;
         net.setPublic(value);
+        // Going private drops charging subscriptions from players who only reached this channel via
+        // public access — otherwise the stale rows linger in save data and their UI keeps showing
+        // "subscribed" to a channel they can no longer use.
+        if (!value) chargingSubscriptions.entrySet()
+                .removeIf(e -> e.getValue().equals(id) && !net.canUse(e.getKey()));
         setDirty();
         return true;
     }
@@ -181,6 +181,13 @@ public class ChannelData extends SavedData {
         QuantumChannel net = networks.get(id);
         if (net == null || !net.canManage(actor)) return false;
         if (net.isOwnedBy(targetPlayerId)) return false; // can't demote the owner
+        // Only the owner may create or alter ADMINs. An admin can manage USER-level members but
+        // cannot promote anyone to ADMIN nor change another admin — otherwise an invited admin
+        // could mint peer admins or reshuffle them and lock out the rest.
+        if (!net.isOwnedBy(actor)) {
+            Permission current = net.playerPermissions().get(targetPlayerId);
+            if (p == Permission.ADMIN || current == Permission.ADMIN) return false;
+        }
         net.setPermission(targetPlayerId, targetName, p);
         setDirty();
         return true;
@@ -257,8 +264,11 @@ public class ChannelData extends SavedData {
     public boolean removePermission(UUID id, @Nullable UUID actor, UUID targetPlayerId) {
         QuantumChannel net = networks.get(id);
         if (net == null || !net.canManage(actor)) return false;
+        // Admins can't strip a peer admin — only the owner can remove another admin.
+        if (!net.isOwnedBy(actor) && net.playerPermissions().get(targetPlayerId) == Permission.ADMIN) return false;
         net.removePermission(targetPlayerId);
-        chargingSubscriptions.remove(targetPlayerId); // they can no longer charge from here
+        // Drop only a subscription that pointed at THIS channel — not one aimed at some other channel.
+        chargingSubscriptions.remove(targetPlayerId, id);
         setDirty();
         return true;
     }
@@ -273,7 +283,9 @@ public class ChannelData extends SavedData {
         UUID pid = player.getUUID();
         List<QuantumChannel> out = new ArrayList<>();
         for (QuantumChannel net : networks.values()) {
-            if (net.ownerId() == null || net.canUse(pid) || net.hasPin()) out.add(net);
+            // Members/owner/public see the channel; a PIN-gated channel also appears (stripped) so
+            // non-members can attempt the PIN — ChannelInfo.from redacts everything but the prompt.
+            if (net.canUse(pid) || net.hasPin()) out.add(net);
         }
         out.sort((a, b) -> a.name().compareToIgnoreCase(b.name()));
         return out;
@@ -695,23 +707,6 @@ public class ChannelData extends SavedData {
                 QuantumChannel net = QuantumChannel.load(list.getCompound(i));
                 data.networks.put(net.id(), net);
                 for (GlobalPos m : net.members()) data.memberToNetwork.put(m, net.id());
-            }
-        } else if (tag.contains("Channels", Tag.TAG_LIST)) {
-            ListTag list = tag.getList("Channels", Tag.TAG_COMPOUND);
-            for (int i = 0; i < list.size(); i++) {
-                CompoundTag channel = list.getCompound(i);
-                UUID id = channel.getUUID("Id");
-                ListTag members = channel.getList("Members", Tag.TAG_COMPOUND);
-                Set<GlobalPos> set = new HashSet<>(members.size());
-                for (int j = 0; j < members.size(); j++) {
-                    CompoundTag m = members.getCompound(j);
-                    ResourceKey<Level> dim = ResourceKey.create(Registries.DIMENSION,
-                            new ResourceLocation(m.getString("Dim")));
-                    set.add(GlobalPos.of(dim, BlockPos.of(m.getLong("Pos"))));
-                }
-                QuantumChannel legacy = QuantumChannel.fromLegacyChannel(id, set);
-                data.networks.put(id, legacy);
-                for (GlobalPos m : set) data.memberToNetwork.put(m, id);
             }
         }
 

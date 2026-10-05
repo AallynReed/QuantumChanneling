@@ -445,7 +445,14 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         gasDispatch = s; gasRoundRobinCursor = 0; bumpLocalEdit();
     }
 
-    /** Round-robin position for a target count of {@code size}, then advance the cursor. */
+    /**
+     * Round-robin position for a target count of {@code size}, then advance the cursor.
+     *
+     * <p>A routed batch runs a SIMULATE pass and an EXECUTE pass; the transit helpers must
+     * {@link #peekItemRoundRobinIndex peek} on the SIMULATE pass and {@code take} only on EXECUTE,
+     * so the cursor advances exactly once per real delivery. Advancing on both passes would skip
+     * every other receiver.
+     */
     public int takeItemRoundRobinIndex(int size) {
         if (size <= 0) return 0;
         int i = Math.floorMod(itemRoundRobinCursor, size);
@@ -467,6 +474,11 @@ public abstract class ChannelBoundBlockEntity extends BlockEntity {
         setChanged();
         return i;
     }
+
+    /** Round-robin position without advancing the cursor — use on the SIMULATE pass. */
+    public int peekItemRoundRobinIndex(int size)  { return size <= 0 ? 0 : Math.floorMod(itemRoundRobinCursor, size); }
+    public int peekFluidRoundRobinIndex(int size) { return size <= 0 ? 0 : Math.floorMod(fluidRoundRobinCursor, size); }
+    public int peekGasRoundRobinIndex(int size)   { return size <= 0 ? 0 : Math.floorMod(gasRoundRobinCursor, size); }
 
     /**
      * Resolves the actual per-tick FE budget. Surge overrides the per-device cap entirely. Otherwise:

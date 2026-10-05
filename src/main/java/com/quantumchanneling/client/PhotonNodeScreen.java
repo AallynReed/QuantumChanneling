@@ -43,7 +43,6 @@ import com.quantumchanneling.channel.SetDeviceSurgePacket;
 import com.quantumchanneling.channel.SetDeviceThroughputPacket;
 import com.quantumchanneling.channel.SetFluidEnabledPacket;
 import com.quantumchanneling.channel.SetGasEnabledPacket;
-import com.quantumchanneling.channel.SetHeatEnabledPacket;
 import com.quantumchanneling.channel.SetFluidSubchannelFilterModePacket;
 import com.quantumchanneling.channel.SetItemEnabledPacket;
 import com.quantumchanneling.channel.SetSubchannelFilterModePacket;
@@ -91,6 +90,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
     /** Indexes into the per-row action strip — used by both renderAccess and mouseClicked. */
     private static final int ACT_TRANSFER = 0, ACT_TOGGLE_ROLE = 1, ACT_BLOCK_CHARGE = 2, ACT_REMOVE = 3;
     private static final int NODE_ROW_H = 12;
+    /** Width of the per-row ping target on the right edge of each Nodes-tab row. */
+    private static final int NODE_PING_W = 10;
 
     /** Height of the hue spectrum strip on the Setup tab. */
     private static final int COLOR_STRIP_H = 18;
@@ -739,6 +740,43 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         // present; other tabs (Status, Tune, Nodes, Stats, Access, Setup, Forge) are always interactive.
         renderConfirmModal(gfx, mouseX, mouseY);
         renderTooltip(gfx, mouseX, mouseY);
+        renderEdgeTabTooltips(gfx, mouseX, mouseY);
+    }
+
+    /**
+     * Hover tooltips for the manually-drawn edge tabs: the resource side-strip on the right and the
+     * "CH" channel-info tab on the left. These aren't vanilla widgets, so their tooltips are drawn
+     * here rather than through {@link #renderTooltip}. Locked gas / heat modes get a trailing note.
+     */
+    private void renderEdgeTabTooltips(GuiGraphics gfx, int mouseX, int mouseY) {
+        if (pendingModal != null) return;
+        // Right-edge resource strip.
+        ResourceMode[] modes = ResourceMode.values();
+        int startY = topPos + CONTENT_TOP;
+        int slot = 0;
+        for (ResourceMode m : modes) {
+            if (!m.visible) continue;
+            int x = leftPos + BG_W;
+            int y = startY + slot * (SIDE_TAB_H + SIDE_TAB_GAP);
+            slot++;
+            if (mouseX >= x && mouseX < x + SIDE_TAB_W && mouseY >= y && mouseY < y + SIDE_TAB_H) {
+                Component base = Component.translatable(m.labelKey);
+                Component tip = m == ResourceMode.HEAT
+                        ? Component.translatable("gui.quantumchanneling.resource.tip.coming_soon", base)
+                        : (isModeLocked(m)
+                            ? Component.translatable("gui.quantumchanneling.resource.tip.locked", base)
+                            : base);
+                gfx.renderTooltip(font, tip, mouseX, mouseY);
+                return;
+            }
+        }
+        // Left-edge "CH" tab.
+        int chX = leftPos - LEFT_TAB_W;
+        int chY = topPos + CONTENT_TOP;
+        if (mouseX >= chX && mouseX < chX + LEFT_TAB_W && mouseY >= chY && mouseY < chY + LEFT_TAB_H) {
+            gfx.renderTooltip(font, Component.translatable("gui.quantumchanneling.channel.info.tab_tip"),
+                    mouseX, mouseY);
+        }
     }
 
     @Override
@@ -1159,7 +1197,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                 "gui.quantumchanneling.channel.info.owner_fmt", currentChannel.ownerName());
 
         // Access (public/private + PIN).
-        String access = currentChannel.isPublic() ? "§aPublic" : "§cPrivate";
+        String access = (currentChannel.isPublic()
+                ? "§a" + Component.translatable("gui.quantumchanneling.access.public").getString()
+                : "§c" + Component.translatable("gui.quantumchanneling.access.private").getString());
         cy = drawChInfoFormatted(gfx, contentX, cy, "gui.quantumchanneling.status.access", access);
         if (currentChannel.hasPin()) {
             cy = drawChInfoFormatted(gfx, contentX, cy, "gui.quantumchanneling.channel.info.pin_fmt", "§6●●●●");
@@ -1808,10 +1848,12 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                 state = Component.translatable("gui.quantumchanneling.charge.locked_by_server");
                 stateColor = 0xFFE07070;
             } else if (on) {
-                state = Component.literal("§a● Active");
+                state = Component.translatable("gui.quantumchanneling.charge.state.active")
+                        .withStyle(ChatFormatting.GREEN);
                 stateColor = 0xFF80E0A0;
             } else {
-                state = Component.literal("§7○ Disabled");
+                state = Component.translatable("gui.quantumchanneling.charge.state.disabled")
+                        .withStyle(ChatFormatting.GRAY);
                 stateColor = 0xFF888888;
             }
             gfx.drawString(font, state, x + 8, y + 20, stateColor, false);
@@ -1930,11 +1972,13 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         } else if (on) {
             border = accent; body = 0xFF192030;
             titleColor = 0xFFFFFFFF; stateColor = 0xFF80E0A0; prColor = 0xFFC8E0FF;
-            state = Component.literal("§a● Active");
+            state = Component.translatable("gui.quantumchanneling.charge.state.active")
+                    .withStyle(ChatFormatting.GREEN);
         } else {
             border = 0xFF333A48; body = 0xFF0F141C;
             titleColor = 0xFFA0A8B4; stateColor = 0xFF888888; prColor = 0xFF6A7280;
-            state = Component.literal("§7○ Disabled");
+            state = Component.translatable("gui.quantumchanneling.charge.state.disabled")
+                    .withStyle(ChatFormatting.GRAY);
         }
         gfx.fill(cx - 1, y - 1, cx + rw + 1, y + CURIOS_CARD_H + 1, border);
         gfx.fill(cx, y, cx + rw, y + CURIOS_CARD_H, body);
@@ -2009,6 +2053,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (nodesScroll > maxScroll) nodesScroll = maxScroll;
 
         gfx.enableScissor(cx, areaTop, cx + rowW + 6, areaBottom);
+        boolean pingHovered = false;
+        int pingTipX = 0, pingTipY = 0;
         for (int i = 0; i < visible && (i + nodesScroll) < total; i++) {
             ChannelInfo.MemberPos m = list.get(i + nodesScroll);
             var p = m.pos();
@@ -2019,29 +2065,49 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             String label = m.customName().isEmpty() ? m.typeName() : (m.customName() + " §7(" + m.typeName() + ")");
             String left = (expanded ? "▼ " : "▶ ") + label + " · " + dimShort;
             gfx.drawString(font, Component.literal(left), cx, y, color, false);
+            // Per-row ping target on the right edge; coords sit to its left.
+            int px = cx + rowW - NODE_PING_W;
+            boolean pingHover = mouseX >= px && mouseX < px + NODE_PING_W && mouseY >= y && mouseY < y + NODE_ROW_H - 1;
+            gfx.drawString(font, Component.literal("⌖"), px, y, pingHover ? 0xFFFFD080 : 0xFF7890A8, false);
+            if (pingHover) { pingHovered = true; pingTipX = mouseX; pingTipY = mouseY; }
             String coords = p.getX() + ", " + p.getY() + ", " + p.getZ();
             int coordsW = font.width(coords);
             gfx.drawString(font, Component.literal(coords),
-                    cx + rowW - coordsW - 4, y, 0xFFFFFF, false);
+                    px - coordsW - 6, y, 0xFFFFFF, false);
         }
         gfx.disableScissor();
 
         if (total > visible) drawScrollbar(gfx, cx + rowW + 2, areaTop, areaBottom - areaTop,
                 visible, total, nodesScroll, maxScroll);
 
+        // Ping tooltip — drawn after the scissor closes so it isn't clipped to the row area.
+        if (pingHovered) {
+            gfx.renderTooltip(font, Component.translatable("gui.quantumchanneling.nodes.ping"), pingTipX, pingTipY);
+        }
+
         // Render expanded details above the (optional) Unbind button.
         ChannelInfo.MemberPos sel = findExpandedMember();
         if (sel != null) {
             int dy = areaBottom + 2;
-            String line1 = "Priority: " + sel.priority()
-                    + "    Surge: " + (sel.surge() ? "ON" : "OFF")
-                    + "    Chunkload: " + (sel.chunkLoaded() ? "ON" : "OFF");
-            String line2 = "Cap: " + (sel.cap() < 0 ? "Unlimited" : String.valueOf(sel.cap()) + " FE/t")
-                    + "    Last tick: " + sel.lastTickRate();
+            Component onOff = Component.translatable(sel.surge()
+                    ? "gui.quantumchanneling.nodes.detail.on" : "gui.quantumchanneling.nodes.detail.off");
+            Component chunk = Component.translatable(sel.chunkLoaded()
+                    ? "gui.quantumchanneling.nodes.detail.on" : "gui.quantumchanneling.nodes.detail.off");
+            Component capVal = sel.cap() < 0
+                    ? Component.translatable("gui.quantumchanneling.nodes.detail.unlimited")
+                    : Component.translatable("gui.quantumchanneling.nodes.detail.cap_unit", sel.cap());
+            Component line1 = Component.translatable("gui.quantumchanneling.nodes.detail.priority", sel.priority())
+                    .append("    ")
+                    .append(Component.translatable("gui.quantumchanneling.nodes.detail.surge", onOff))
+                    .append("    ")
+                    .append(Component.translatable("gui.quantumchanneling.nodes.detail.chunkload", chunk));
+            Component line2 = Component.translatable("gui.quantumchanneling.nodes.detail.cap", capVal)
+                    .append("    ")
+                    .append(Component.translatable("gui.quantumchanneling.nodes.detail.last_tick", sel.lastTickRate()));
             // Only show if there's space (when we reserved the bottom for the Unbind button or not)
             if (dy + 20 < topPos + BG_H) {
-                gfx.drawString(font, Component.literal(line1), cx, dy, 0xC8E0FF, false);
-                gfx.drawString(font, Component.literal(line2), cx, dy + 10, 0xC8E0FF, false);
+                gfx.drawString(font, line1, cx, dy, 0xC8E0FF, false);
+                gfx.drawString(font, line2, cx, dy + 10, 0xC8E0FF, false);
             }
         }
     }
@@ -2089,12 +2155,12 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
         // Scale label (top-left of graph) — show the max value.
         if (max > 0) {
-            String maxLabel = formatFE(max) + " FE/s";
-            gfx.drawString(font, Component.literal(maxLabel), x + 3, y + 1, 0xFFC8E0FF, false);
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.stats.graph.unit", formatFE(max)),
+                    x + 3, y + 1, 0xFFC8E0FF, false);
         }
         // X-axis label (bottom-left).
-        String label = "↤ " + statsWindow + " min   now ↦";
-        gfx.drawString(font, Component.literal(label), x + 3, y + h - 9, 0x55FFFFFF, false);
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.stats.graph.axis", statsWindow),
+                x + 3, y + h - 9, 0x55FFFFFF, false);
     }
 
     /** Simple 2D line via Bresenham — gfx.fill doesn't draw diagonals. */
@@ -2114,9 +2180,12 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
     /** Hit-test on the Stats tab's window buttons. Returns the chosen window minute or 0. */
     private int statsWindowAt(double mx, double my) {
+        // Storage devices draw a fill bar instead of the window switcher — no buttons to hit.
+        if (menu.isStorage()) return 0;
         int cx = leftPos + 8;
         int btnW = 36, btnH = 14, btnGap = 4;
-        int btnY = topPos + CONTENT_TOP + 4;
+        // Mirrors renderHistoryStats: content top + 4, then a 12-px header before the button row.
+        int btnY = topPos + CONTENT_TOP + 4 + 12;
         if (my < btnY || my >= btnY + btnH) return 0;
         int[] windows = { 1, 5, 10 };
         for (int i = 0; i < 3; i++) {
@@ -2149,6 +2218,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
 
     /** Stats rendering for emitter/receiver/manager — window switcher + line graph + Instant text. */
     private int renderHistoryStats(GuiGraphics gfx, int cx, int rw, int y) {
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.stats.header")
+                .withStyle(ChatFormatting.AQUA), cx, y, 0xC8E0FF, false);
+        y += 12;
         // Window switch buttons (1m / 5m / 10m).
         int btnW = 36, btnH = 14, btnGap = 4;
         int[] windows = { 1, 5, 10 };
@@ -2208,8 +2280,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         y += barH + 4;
 
         // Stored / capacity figures.
-        String line = formatFE(stored) + " / " + formatFE(capacity) + " FE";
-        gfx.drawString(font, Component.literal(line), cx, y, 0xCCCCCC, false);
+        gfx.drawString(font, Component.translatable("gui.quantumchanneling.stats.storage.stored_fmt",
+                formatFE(stored), formatFE(capacity)), cx, y, 0xCCCCCC, false);
         y += 14;
         return y;
     }
@@ -2340,8 +2412,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return;
         }
         if (!currentChannel.canManage()) {
-            gfx.drawString(font, Component.literal("§7Read-only — admin permission required"),
-                    cx, topPos + CONTENT_TOP + 4, 0xAAAAAA, false);
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.access.read_only")
+                    .withStyle(ChatFormatting.GRAY), cx, topPos + CONTENT_TOP + 4, 0xAAAAAA, false);
             return;
         }
         int areaTop = topPos + CONTENT_TOP + 4;
@@ -2399,7 +2471,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return;
         }
         if (!currentChannel.canManage()) {
-            gfx.drawString(font, Component.literal("§7Read-only — admin permission required"), cx, y, 0xAAAAAA, false);
+            gfx.drawString(font, Component.translatable("gui.quantumchanneling.access.read_only")
+                    .withStyle(ChatFormatting.GRAY), cx, y, 0xAAAAAA, false);
             return;
         }
         // Color section header + hue spectrum strip. Click hit-test in mouseClicked → Tab.SETUP.
@@ -2709,10 +2782,18 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             int areaBottom = topPos + BG_H - (expandedNodePos != null && currentChannel.canManage() ? 56 : 6);
             int visible = Math.max(1, (areaBottom - areaTop) / NODE_ROW_H);
             var list = sortedMembers();
+            int pingX = cx + rowW - NODE_PING_W;
             for (int i = 0; i < visible && (i + nodesScroll) < list.size(); i++) {
                 int y = areaTop + i * NODE_ROW_H;
-                if (mx >= cx && mx < cx + rowW && my >= y && my < y + NODE_ROW_H) {
-                    long packed = list.get(i + nodesScroll).packedPos();
+                if (my < y || my >= y + NODE_ROW_H) continue;
+                ChannelInfo.MemberPos m = list.get(i + nodesScroll);
+                // Right-edge ping target takes priority over the row's expand toggle.
+                if (mx >= pingX && mx < pingX + NODE_PING_W) {
+                    ModMessages.sendToServer(new com.quantumchanneling.channel.PingDevicePacket(m.dim(), m.pos()));
+                    return true;
+                }
+                if (mx >= cx && mx < cx + rowW) {
+                    long packed = m.packedPos();
                     if (expandedNodePos != null && expandedNodePos == packed) {
                         expandedNodePos = null;
                     } else {
@@ -3254,7 +3335,8 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             }
             if (hoveredStack != null) gfx.renderTooltip(font, hoveredStack, mouseX, mouseY);
             if (f.size() > ITEMS_SLOTS_VISIBLE) {
-                gfx.drawString(font, Component.literal("… +" + (f.size() - ITEMS_SLOTS_VISIBLE) + " more"),
+                gfx.drawString(font, Component.translatable("gui.quantumchanneling.items.overflow",
+                                f.size() - ITEMS_SLOTS_VISIBLE),
                         cx + 4, topPos + CONTENT_TOP + 80 + ITEMS_SLOT_ROWS * ITEMS_SLOT_SIZE + 2,
                         0xFF808890, false);
             }
@@ -3357,7 +3439,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
             return Component.translatable("gui.quantumchanneling.items.no_subs");
         }
         ItemSubchannel sub = findVisibleItemSubchannel(selectedSubchannelId);
-        String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
+        String name = (sub == null || sub.name().isEmpty())
+                ? Component.translatable("gui.quantumchanneling.items.sub_unnamed").getString()
+                : sub.name();
         return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
     }
 
@@ -3480,7 +3564,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         }
         if (editingFluidVoid) return Component.translatable("gui.quantumchanneling.items.editing_void");
         FluidSubchannel sub = findVisibleFluidSubchannel(selectedFluidSubchannelId);
-        String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
+        String name = (sub == null || sub.name().isEmpty())
+                ? Component.translatable("gui.quantumchanneling.items.sub_unnamed").getString()
+                : sub.name();
         return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
     }
 
@@ -3691,12 +3777,16 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                             b -> ModMessages.sendToServer(new MoveDeviceFluidSubchannelPacket(menu.getBlockPos(), subId, -1)),
                             this::accentColor);
                     up.active = canUp;
+                    up.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                            Component.translatable("gui.quantumchanneling.items.priority_up.tip")));
                     addRenderableWidget(up);
                     PhotonButton down = PhotonButton.of(cx + 60, topPos + CONTENT_TOP + 160, 56, 18,
                             Component.translatable("gui.quantumchanneling.items.priority_down"),
                             b -> ModMessages.sendToServer(new MoveDeviceFluidSubchannelPacket(menu.getBlockPos(), subId, +1)),
                             this::accentColor);
                     down.active = canDown;
+                    down.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                            Component.translatable("gui.quantumchanneling.items.priority_down.tip")));
                     addRenderableWidget(down);
                 }
             }
@@ -3864,7 +3954,9 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         }
         if (editingGasVoid) return Component.translatable("gui.quantumchanneling.items.editing_void");
         var sub = findVisibleGasSubchannel(selectedGasSubchannelId);
-        String name = sub == null ? "?" : (sub.name().isEmpty() ? "(unnamed)" : sub.name());
+        String name = (sub == null || sub.name().isEmpty())
+                ? Component.translatable("gui.quantumchanneling.items.sub_unnamed").getString()
+                : sub.name();
         return Component.translatable("gui.quantumchanneling.items.editing_sub", name);
     }
 
@@ -4086,12 +4178,18 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
                             Component.translatable("gui.quantumchanneling.items.priority_up"),
                             b -> ModMessages.sendToServer(new com.quantumchanneling.channel.MoveDeviceGasSubchannelPacket(menu.getBlockPos(), subId, -1)),
                             this::accentColor);
-                    up.active = myIdx > 0; addRenderableWidget(up);
+                    up.active = myIdx > 0;
+                    up.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                            Component.translatable("gui.quantumchanneling.items.priority_up.tip")));
+                    addRenderableWidget(up);
                     PhotonButton down = PhotonButton.of(cx + 60, topPos + CONTENT_TOP + 160, 56, 18,
                             Component.translatable("gui.quantumchanneling.items.priority_down"),
                             b -> ModMessages.sendToServer(new com.quantumchanneling.channel.MoveDeviceGasSubchannelPacket(menu.getBlockPos(), subId, +1)),
                             this::accentColor);
-                    down.active = myIdx < total - 1; addRenderableWidget(down);
+                    down.active = myIdx < total - 1;
+                    down.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                            Component.translatable("gui.quantumchanneling.items.priority_down.tip")));
+                    addRenderableWidget(down);
                 }
             }
         }
@@ -4159,7 +4257,7 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         }
 
         if (emitter && here != null && !editingGasVoid && selectedGasSubchannelId != null) {
-            java.util.List<java.util.UUID> mySubs = here.subscribedGasSubchannels();
+            java.util.List<java.util.UUID> mySubs = orderedIds(here.gasSubchannels());
             int myIdx = mySubs.indexOf(selectedGasSubchannelId);
             if (myIdx >= 0 && mySubs.size() >= 2) {
                 gfx.drawString(font, Component.translatable(
@@ -4206,35 +4304,31 @@ public class PhotonNodeScreen extends AbstractContainerScreen<PhotonNodeMenu> {
         if (currentChannel == null) return;
         int cx = leftPos + 8;
         boolean enabled = currentChannel.heatConfig().isEnabled();
-        boolean locked = !Compat.heatProviderLoaded();
+        // Heat transport isn't implemented — the toggle is inert so a click can't persist a no-op
+        // flag or fire SetHeatEnabledPacket. renderHeatPanel always shows the coming-soon body.
         PhotonButton btn = PhotonButton.of(cx, topPos + CONTENT_TOP + 4, 120, 18,
                 Component.translatable(enabled
                         ? "gui.quantumchanneling.heat.enabled"
                         : "gui.quantumchanneling.heat.disabled"),
-                b -> {
-                    if (currentChannel != null) ModMessages.sendToServer(
-                            new SetHeatEnabledPacket(currentChannel.id(), !enabled));
-                }, this::accentColor);
-        btn.active = !locked;
+                b -> {}, this::accentColor);
+        btn.active = false;
         addRenderableWidget(btn);
     }
 
     private void renderHeatPanel(GuiGraphics gfx) {
         int cx = leftPos + 8;
         int rw = BG_W - 16;
-        boolean locked = !Compat.heatProviderLoaded();
         if (currentChannel == null) {
             gfx.drawString(font, Component.translatable("gui.quantumchanneling.channel.unbound")
                     .withStyle(ChatFormatting.GRAY), cx, topPos + CONTENT_TOP + 4, 0xAAAAAA, false);
             return;
         }
-        String body = locked
-                ? "gui.quantumchanneling.resource.heat.locked_body"
-                : "gui.quantumchanneling.heat.body";
-        var lines = font.split(Component.translatable(body).withStyle(ChatFormatting.GRAY), rw - 8);
+        // Heat routing is unimplemented — always show the "not ready" explainer, never the live body.
+        var lines = font.split(Component.translatable("gui.quantumchanneling.resource.heat.locked_body")
+                .withStyle(ChatFormatting.GRAY), rw - 8);
         int y = topPos + CONTENT_TOP + 36;
         for (var line : lines) {
-            gfx.drawString(font, line, cx, y, locked ? 0xFFE08080 : 0xFFAAAAAA, false);
+            gfx.drawString(font, line, cx, y, 0xFFE08080, false);
             y += 11;
         }
     }

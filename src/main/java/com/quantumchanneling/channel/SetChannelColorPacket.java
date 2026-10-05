@@ -15,8 +15,10 @@ public record SetChannelColorPacket(UUID id, int color) {
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
-            ChannelData.get(player.serverLevel().getServer())
-                    .setColor(p.id, player.getUUID(), p.color);
+            var server = player.serverLevel().getServer();
+            if (ChannelData.get(server).setColor(p.id, player.getUUID(), p.color)) {
+                CreateChannelPacket.broadcastListTo(server, p.id);
+            }
             CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);

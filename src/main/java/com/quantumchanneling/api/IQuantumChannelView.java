@@ -26,6 +26,13 @@ public interface IQuantumChannelView {
     /** Defensive snapshot of every bound device position on this channel. */
     List<GlobalPos> members();
 
+    /**
+     * Resolved device views for every member whose level is currently loaded and reachable.
+     * Members in an unavailable dimension (or on an unloaded chunk) are skipped, so this list may
+     * be shorter than {@link #members()}.
+     */
+    List<IQuantumDeviceView> devices();
+
     /** Live throughput summary for the last server tick. */
     int totalEmitterInputFE();
     int totalReceiverOutputFE();

@@ -9,7 +9,8 @@ import java.util.UUID;
 /**
  * Read-only view of one bound Quantum Channeling device. Returned by the
  * {@link QuantumChannelingAPI#deviceAt(net.minecraft.server.level.ServerLevel, net.minecraft.core.BlockPos)}
- * lookup and from {@link IQuantumChannelView#members()}.
+ * lookup and from {@link IQuantumChannelView#devices()}. ({@link IQuantumChannelView#members()}
+ * returns the bare {@link net.minecraft.core.GlobalPos} of each member, not this view.)
  */
 public interface IQuantumDeviceView {
     enum Kind { EMITTER, RECEIVER, STORAGE, MANAGER, UNKNOWN }

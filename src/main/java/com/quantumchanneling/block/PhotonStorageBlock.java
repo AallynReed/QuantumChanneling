@@ -29,7 +29,7 @@ import org.jetbrains.annotations.Nullable;
 
 /**
  * Photon Storage block — one of five tiers (Copper / Iron / Gold / Diamond / Emerald) with
- * increasing FE capacity. The {@link #LEVEL} state property tracks fill in five buckets (0..4) so
+ * increasing FE capacity. The {@link #LEVEL} state property tracks fill in nine buckets (0..8) so
  * the model can paint visible fill cubes that grow as the buffer fills up.
  *
  * <p>Storage does <em>not</em> expose an {@link net.minecraftforge.energy.IEnergyStorage} capability

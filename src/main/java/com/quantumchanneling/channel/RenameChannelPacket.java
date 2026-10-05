@@ -17,7 +17,10 @@ public record RenameChannelPacket(UUID id, String name) {
             if (player == null) return;
             String name = p.name.trim();
             if (name.isEmpty() || name.length() > 32) return;
-            ChannelData.get(player.serverLevel().getServer()).renameChannel(p.id, player.getUUID(), name);
+            var server = player.serverLevel().getServer();
+            if (ChannelData.get(server).renameChannel(p.id, player.getUUID(), name)) {
+                CreateChannelPacket.broadcastListTo(server, p.id);
+            }
             CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);

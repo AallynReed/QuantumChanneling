@@ -396,6 +396,16 @@ public record ChannelInfo(
     }
 
     public static ChannelInfo from(QuantumChannel net, @Nullable UUID viewerId, boolean subscribed, MinecraftServer server) {
+        // A viewer who can't use the channel only sees it because it advertises a join PIN. Hand back
+        // just enough to attempt the PIN — never the owner, roster, member positions, or coordinates.
+        if (!net.canUse(viewerId)) {
+            return new ChannelInfo(net.id(), net.name(), null, "", 0, false, false, 0, false,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    net.color(), net.hasPin(), "", false,
+                    0, 0, 0, 0, 0, new int[]{0, 0, 0, 0},
+                    List.of(), List.of(), List.of(),
+                    net.itemConfig(), net.fluidConfig(), net.gasConfig(), net.heatConfig());
+        }
         ChannelData data = ChannelData.get(server);
         List<PlayerEntry> ps = new ArrayList<>();
         // Owner appears at the top of the list as an implicit ADMIN — they're not stored in

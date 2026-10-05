@@ -17,8 +17,9 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * Attaches Mekanism gas + heat capabilities to our emitters and receivers via
- * {@link AttachCapabilitiesEvent}. This class is in the {@code compat.mekanism} package and
+ * Attaches the Mekanism gas capability to our emitters and receivers via
+ * {@link AttachCapabilitiesEvent}. Heat is deliberately left off — see {@link #attach}. This class
+ * is in the {@code compat.mekanism} package and
  * imports Mekanism API types, so it must NOT be loaded unless Mekanism is present.
  *
  * <p>Call {@link #register()} from the main mod class, gated by

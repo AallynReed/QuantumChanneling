@@ -115,6 +115,30 @@ public class ServerConfig {
                      "pipeline is intentionally not yet implemented; flip this on once it ships).")
             .define("routing.heat.enabled", false);
 
+    /* ---- Star Shaper's Hammer collapse burst ---- */
+
+    private static final ForgeConfigSpec.BooleanValue STAR_COLLAPSE_ENABLED = B
+            .comment("Whether crushing a White Dwarf triggers the collapse burst at all. When false,",
+                     "the hammer still forges Uncontained Black Holes but produces no blast.")
+            .define("endgame.starShaper.collapseBurst", true);
+    private static final ForgeConfigSpec.BooleanValue STAR_COLLAPSE_BREAK_BLOCKS = B
+            .comment("Whether the collapse burst breaks terrain. Set false on shared servers to keep",
+                     "the spectacle and mob damage without the crater.")
+            .define("endgame.starShaper.breakBlocks", true);
+    private static final ForgeConfigSpec.BooleanValue STAR_COLLAPSE_RESPECT_CLAIMS = B
+            .comment("When breaking blocks, skip chunks claimed via FTB Chunks (any team). Only",
+                     "meaningful when FTB Chunks is installed.")
+            .define("endgame.starShaper.respectClaims", true);
+    private static final ForgeConfigSpec.IntValue STAR_COLLAPSE_RADIUS = B
+            .comment("Base radius of the collapse burst in blocks (before water amplification).")
+            .defineInRange("endgame.starShaper.radius", 10, 0, 64);
+    private static final ForgeConfigSpec.DoubleValue STAR_COLLAPSE_DAMAGE = B
+            .comment("Peak damage at the burst center; falls off linearly to 0 at the radius.")
+            .defineInRange("endgame.starShaper.peakDamage", 8.0, 0.0, 1000.0);
+    private static final ForgeConfigSpec.DoubleValue STAR_COLLAPSE_WATER_AMP = B
+            .comment("Multiplier applied to radius AND peak damage when the crush happens in water.")
+            .defineInRange("endgame.starShaper.waterAmplify", 3.0, 1.0, 10.0);
+
     /* ---- wireless charging (per-slot disable + master switch) ---- */
 
     private static final ForgeConfigSpec.BooleanValue ENABLE_WIRELESS = B
@@ -168,6 +192,13 @@ public class ServerConfig {
     public static int     gasesMaxSubsPerChannel = 9;
 
     public static boolean heatRoutingEnabled   = false;
+
+    public static boolean starCollapseEnabled     = true;
+    public static boolean starCollapseBreakBlocks = true;
+    public static boolean starCollapseRespectClaims = true;
+    public static int     starCollapseRadius      = 10;
+    public static double  starCollapsePeakDamage  = 8.0;
+    public static double  starCollapseWaterAmp    = 3.0;
 
     public static boolean wirelessEnabled       = true;
     public static boolean slotHandEnabled       = true;
@@ -225,6 +256,12 @@ public class ServerConfig {
             gasesMaxSubsPerReceiver = GASES_MAX_SUBS_PER_RECEIVER.get();
             gasesMaxSubsPerChannel  = GASES_MAX_SUBS_PER_CHANNEL.get();
             heatRoutingEnabled      = HEAT_ENABLED.get();
+            starCollapseEnabled     = STAR_COLLAPSE_ENABLED.get();
+            starCollapseBreakBlocks = STAR_COLLAPSE_BREAK_BLOCKS.get();
+            starCollapseRespectClaims = STAR_COLLAPSE_RESPECT_CLAIMS.get();
+            starCollapseRadius      = STAR_COLLAPSE_RADIUS.get();
+            starCollapsePeakDamage  = STAR_COLLAPSE_DAMAGE.get();
+            starCollapseWaterAmp    = STAR_COLLAPSE_WATER_AMP.get();
             wirelessEnabled        = ENABLE_WIRELESS.get();
             slotHandEnabled        = ENABLE_HAND.get();
             slotHotbarEnabled      = ENABLE_HOTBAR.get();

@@ -54,12 +54,27 @@ public record CreateChannelPacket(String name, int color, String pin, boolean is
 
     public static void sendListBackTo(ServerPlayer player) {
         var server = player.serverLevel().getServer();
+        ModMessages.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
+                buildListFor(player, ChannelData.get(server)));
+    }
+
+    /** Re-sync every online player who can currently see the channel {@code channelId}. */
+    public static void broadcastListTo(net.minecraft.server.MinecraftServer server, java.util.UUID channelId) {
         ChannelData data = ChannelData.get(server);
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            boolean sees = data.visibleTo(player).stream().anyMatch(n -> n.id().equals(channelId));
+            if (!sees) continue;
+            ModMessages.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
+                    buildListFor(player, data));
+        }
+    }
+
+    private static ShowChannelsListPacket buildListFor(ServerPlayer player, ChannelData data) {
+        var server = player.serverLevel().getServer();
         java.util.UUID sub = data.getChargingSubscription(player.getUUID());
         var list = data.visibleTo(player).stream()
                 .map(n -> ChannelInfo.from(n, player.getUUID(), n.id().equals(sub), server))
                 .toList();
-        ModMessages.CHANNEL.send(PacketDistributor.PLAYER.with(() -> player),
-                new ShowChannelsListPacket(list));
+        return new ShowChannelsListPacket(list);
     }
 }

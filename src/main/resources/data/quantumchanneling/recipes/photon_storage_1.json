@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "CCC",
+    "CQC",
+    "CCC"
+  ],
+  "key": {
+    "C": { "item": "minecraft:copper_block" },
+    "Q": { "item": "quantumchanneling:quantum_core" }
+  },
+  "result": {
+    "item": "quantumchanneling:photon_storage_1",
+    "count": 1
+  }
+}

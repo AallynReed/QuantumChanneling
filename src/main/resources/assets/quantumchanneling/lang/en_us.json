@@ -12,6 +12,21 @@
   "block.quantumchanneling.photon_storage_5": "Photon Storage V",
   "block.quantumchanneling.photon_manager": "Photon Manager",
 
+  "item.quantumchanneling.photon_manager_container": "Photon Manager Container",
+  "item.quantumchanneling.dyson_ring": "Dyson Ring",
+  "block.quantumchanneling.star_alloy_block": "Star Alloy Block",
+  "block.quantumchanneling.star_shapers_hammer": "Star Shaper's Hammer",
+  "item.quantumchanneling.white_dwarf": "White Dwarf",
+  "item.quantumchanneling.uncontained_black_hole": "Uncontained Black Hole",
+
+  "tooltip.quantumchanneling.photon_manager_container": "§oContainment shell for an unstable singularity. Crafting ingredient.§r",
+  "tooltip.quantumchanneling.dyson_ring": "§oReinforced netherite-gold lattice that channels exotic forces. Crafting ingredient.§r",
+  "tooltip.quantumchanneling.star_alloy_block": "§oAlloy fused from netherite and nether-star essence under diamond compression. §7Immune to the Star Shaper's Hammer collapse burst — the only practical building material for a containment chamber.§r",
+  "tooltip.quantumchanneling.star_shapers_hammer": "§oPlace the hammer above an air gap and drop ingredients below. Removing its support lets it fall like an anvil — when it lands, every Nether Star (→ 2 White Dwarfs each) or White Dwarf (→ 1 Uncontained Black Hole each) it crossed in flight is crushed, full stacks at once. Crushing a White Dwarf releases a violet collapse burst that damages life, breaks every block (except Bedrock + Star Alloy) and vaporises every loose item (except Uncontained Black Holes) within 10 blocks — then a dark implosion vortex follows, with the surviving Black Holes hovering in place until it ends. Doing the crush in water amplifies radius and damage 3×.§r",
+  "tooltip.quantumchanneling.white_dwarf": "§oCollapsed remnant of a nether star. Crush it with the Star Shaper's Hammer and it collapses into an Uncontained Black Hole.§r",
+  "tooltip.quantumchanneling.uncontained_black_hole": "§oUnstable singularity. Handle with caution. Crafting ingredient. §7As an item entity, immune to explosion damage — survives TNT, creepers, and the Star Shaper's own collapse burst.§r",
+
+
   "message.quantumchanneling.permission.unknown_player": "Unknown player: %s",
 
   "gui.quantumchanneling.tab.status": "Status",
@@ -73,6 +88,24 @@
 
   "gui.quantumchanneling.setup.color": "Channel color",
   "gui.quantumchanneling.node.unbind": "Unbind selected device from channel",
+  "gui.quantumchanneling.nodes.ping": "Locate, flash particles at this device",
+  "gui.quantumchanneling.nodes.detail.priority": "Priority: %s",
+  "gui.quantumchanneling.nodes.detail.surge": "Overdrive: %s",
+  "gui.quantumchanneling.nodes.detail.chunkload": "Chunkload: %s",
+  "gui.quantumchanneling.nodes.detail.cap": "Cap: %s",
+  "gui.quantumchanneling.nodes.detail.last_tick": "Last tick: %s",
+  "gui.quantumchanneling.nodes.detail.cap_unit": "%s FE/t",
+  "gui.quantumchanneling.nodes.detail.on": "ON",
+  "gui.quantumchanneling.nodes.detail.off": "OFF",
+  "gui.quantumchanneling.nodes.detail.unlimited": "Unlimited",
+
+  "gui.quantumchanneling.access.read_only": "Read-only — admin permission required",
+
+  "gui.quantumchanneling.charge.state.active": "● Active",
+  "gui.quantumchanneling.charge.state.disabled": "○ Disabled",
+
+  "gui.quantumchanneling.access.public": "Public",
+  "gui.quantumchanneling.access.private": "Private",
 
   "gui.quantumchanneling.sort.by": "Sort",
   "gui.quantumchanneling.sort.name": "Name",
@@ -105,11 +138,18 @@
   "gui.quantumchanneling.stats.total_output.fluids": "Total output: %s mB/t  (%s mB/s)",
   "gui.quantumchanneling.stats.total_input.gases":   "Total input: %s mB/t  (%s mB/s)",
   "gui.quantumchanneling.stats.total_output.gases":  "Total output: %s mB/t  (%s mB/s)",
+  "gui.quantumchanneling.stats.total_input.heat":    "(heat unavailable)",
+  "gui.quantumchanneling.stats.total_output.heat":   "(heat unavailable)",
   "gui.quantumchanneling.stats.instant": "Instant: %s FE/t  (%s FE/s)",
   "gui.quantumchanneling.stats.instant.energy": "Instant: %s FE/t  (%s FE/s)",
   "gui.quantumchanneling.stats.instant.items":  "Instant: %s items/t  (%s items/s)",
   "gui.quantumchanneling.stats.instant.fluids": "Instant: %s mB/t  (%s mB/s)",
   "gui.quantumchanneling.stats.instant.gases":  "Instant: %s mB/t  (%s mB/s)",
+  "gui.quantumchanneling.stats.instant.heat":   "(heat unavailable)",
+  "gui.quantumchanneling.stats.header": "Throughput history",
+  "gui.quantumchanneling.stats.graph.unit": "%s FE/s",
+  "gui.quantumchanneling.stats.graph.axis": "↤ %s min   now ↦",
+  "gui.quantumchanneling.stats.storage.stored_fmt": "%s / %s FE",
   "gui.quantumchanneling.stats.avg_1m": "1-min avg:  %s FE/s",
   "gui.quantumchanneling.stats.avg_5m": "5-min avg:  %s FE/s",
   "gui.quantumchanneling.stats.avg_10m": "10-min avg: %s FE/s",
@@ -211,6 +251,9 @@
 
   "gui.quantumchanneling.charge.scroll_hint": "Scroll over a slot to change its priority",
 
+  "gui.quantumchanneling.resource.tip.locked": "%s (locked)",
+  "gui.quantumchanneling.resource.tip.coming_soon": "%s (coming soon)",
+  "gui.quantumchanneling.channel.info.tab_tip": "Channel info",
   "gui.quantumchanneling.resource.energy": "Energy",
   "gui.quantumchanneling.resource.items":  "Items",
   "gui.quantumchanneling.resource.fluids": "Fluids",
@@ -246,6 +289,8 @@
   "gui.quantumchanneling.items.priority_up.tip":      "Move this subchannel higher in this emitter's routing list. Higher entries fire first when an item could match either.",
   "gui.quantumchanneling.items.priority_down.tip":    "Move this subchannel lower in this emitter's routing list. Lower entries only fire when nothing earlier matched.",
   "gui.quantumchanneling.items.empty_state":          "No subchannels yet. Type a name above and click + Sub to create one.",
+  "gui.quantumchanneling.items.overflow":             "… +%s more",
+  "gui.quantumchanneling.items.sub_unnamed":          "(unnamed)",
   "gui.quantumchanneling.fluids.enabled":             "FLUIDS: ON",
   "gui.quantumchanneling.fluids.disabled":            "FLUIDS: OFF",
   "gui.quantumchanneling.fluids.sub_count":           "Fluid subchannels on this channel: %s",

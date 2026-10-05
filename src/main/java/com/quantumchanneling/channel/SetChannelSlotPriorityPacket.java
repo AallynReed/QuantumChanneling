@@ -22,10 +22,12 @@ public record SetChannelSlotPriorityPacket(UUID channelId, int slotBit, int prio
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
-            ChannelData data = ChannelData.get(player.serverLevel().getServer());
+            var server = player.serverLevel().getServer();
+            ChannelData data = ChannelData.get(server);
             if (data.setSlotPriority(p.channelId, player.getUUID(), p.slotBit, p.priority)) {
-                CreateChannelPacket.sendListBackTo(player);
+                CreateChannelPacket.broadcastListTo(server, p.channelId);
             }
+            CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);
     }

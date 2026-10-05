@@ -15,7 +15,17 @@ public record SetChannelPublicPacket(UUID id, boolean publicAccess) {
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
-            ChannelData.get(player.serverLevel().getServer()).setPublic(p.id, player.getUUID(), p.publicAccess);
+            var server = player.serverLevel().getServer();
+            ChannelData data = ChannelData.get(server);
+            // Going private drops the channel off ex-public-viewers' screens — capture them first so
+            // they get an updated (channel-less) list even though broadcastListTo won't reach them.
+            java.util.List<ServerPlayer> before = server.getPlayerList().getPlayers().stream()
+                    .filter(pl -> data.visibleTo(pl).stream().anyMatch(n -> n.id().equals(p.id)))
+                    .toList();
+            if (data.setPublic(p.id, player.getUUID(), p.publicAccess)) {
+                CreateChannelPacket.broadcastListTo(server, p.id);
+                for (ServerPlayer pl : before) CreateChannelPacket.sendListBackTo(pl);
+            }
             CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);

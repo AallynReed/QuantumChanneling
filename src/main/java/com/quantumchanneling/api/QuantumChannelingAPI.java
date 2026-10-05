@@ -38,26 +38,39 @@ import java.util.UUID;
 public final class QuantumChannelingAPI {
     private QuantumChannelingAPI() {}
 
+    /** Deterministic member ordering: dimension location string, then packed BlockPos long. */
+    private static final java.util.Comparator<GlobalPos> MEMBER_ORDER =
+            java.util.Comparator.comparing((GlobalPos gp) -> gp.dimension().location().toString())
+                    .thenComparingLong(gp -> gp.pos().asLong());
+
     /** Every channel currently known to {@code server}. Defensive copy. */
     public static List<UUID> listChannels(@Nullable MinecraftServer server) {
-        if (server == null) return List.of();
+        if (server == null || !server.isSameThread()) return List.of();
         return new ArrayList<>(ChannelData.get(server).getChannels().keySet());
     }
 
     /** Look up a channel by id. Empty when {@code id} is unknown or {@code server} is null. */
     public static Optional<IQuantumChannelView> getChannel(@Nullable MinecraftServer server, @Nullable UUID id) {
-        if (server == null || id == null) return Optional.empty();
+        if (server == null || id == null || !server.isSameThread()) return Optional.empty();
         QuantumChannel ch = ChannelData.get(server).getChannel(id);
         return ch == null ? Optional.empty() : Optional.of(new ChannelViewImpl(server, ch));
     }
 
     /** Look up the bound device (if any) at {@code pos} in {@code level}. */
     public static Optional<IQuantumDeviceView> deviceAt(@Nullable ServerLevel level, @Nullable BlockPos pos) {
-        if (level == null || pos == null || !level.isLoaded(pos)) return Optional.empty();
+        if (level == null || pos == null) return Optional.empty();
+        MinecraftServer server = level.getServer();
+        if (server == null || !server.isSameThread()) return Optional.empty();
+        if (!level.isLoaded(pos)) return Optional.empty();
         BlockEntity be = level.getBlockEntity(pos);
         if (!(be instanceof ChannelBoundBlockEntity bound)) return Optional.empty();
         return Optional.of(new DeviceViewImpl(bound));
     }
+
+    /** Wraps a hosted subchannel in its read-only view without a device lookup. Internal use. */
+    public static IQuantumSubchannelView viewOf(ItemSubchannel s)  { return new ItemSubView(s); }
+    public static IQuantumSubchannelView viewOf(FluidSubchannel s) { return new FluidSubView(s); }
+    public static IQuantumSubchannelView viewOf(GasSubchannel s)   { return new GasSubView(s); }
 
     /* ---- adapters ---- */
 
@@ -69,7 +82,20 @@ public final class QuantumChannelingAPI {
         @Override public int memberCount() { return ch.memberCount(); }
         @Override public boolean isPublic() { return ch.isPublic(); }
         @Override public int color() { return ch.color(); }
-        @Override public List<GlobalPos> members() { return new ArrayList<>(ch.members()); }
+        @Override public List<GlobalPos> members() {
+            List<GlobalPos> out = new ArrayList<>(ch.members());
+            out.sort(MEMBER_ORDER);
+            return out;
+        }
+        @Override public List<IQuantumDeviceView> devices() {
+            List<IQuantumDeviceView> out = new ArrayList<>();
+            for (GlobalPos gp : members()) {
+                ServerLevel lvl = server.getLevel(gp.dimension());
+                if (lvl == null) continue;
+                deviceAt(lvl, gp.pos()).ifPresent(out::add);
+            }
+            return out;
+        }
         @Override public int totalEmitterInputFE() {
             int total = 0;
             for (GlobalPos gp : ch.members()) {

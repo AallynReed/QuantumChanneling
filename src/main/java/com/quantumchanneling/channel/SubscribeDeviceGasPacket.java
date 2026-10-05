@@ -1,10 +1,10 @@
 package com.quantumchanneling.channel;
 
+import com.quantumchanneling.blockentity.ChannelBoundBlockEntity;
 import com.quantumchanneling.blockentity.PhotonReceiverBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraftforge.network.NetworkEvent;
 
 import java.util.UUID;
@@ -24,9 +24,9 @@ public record SubscribeDeviceGasPacket(BlockPos pos, UUID subId, boolean subscri
         NetworkEvent.Context ctx = sup.get();
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
-            if (player == null || !PacketUtil.withinReach(player, p.pos)) return;
-            BlockEntity be = player.level().getBlockEntity(p.pos);
-            if (!(be instanceof PhotonReceiverBlockEntity rcv)) return;
+            if (player == null) return;
+            ChannelBoundBlockEntity dev = PacketUtil.usableDevice(player, p.pos);
+            if (!(dev instanceof PhotonReceiverBlockEntity rcv)) return;
             boolean changed = p.subscribe
                     ? rcv.addSubscribedGasSubchannel(p.subId)
                     : rcv.removeSubscribedGasSubchannel(p.subId);

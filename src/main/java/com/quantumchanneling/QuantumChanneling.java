@@ -152,6 +152,61 @@ public class QuantumChanneling {
             () -> new PhotonShaderBlockItem(PHOTON_MANAGER.get(), new Item.Properties(),
                     "tooltip.quantumchanneling.photon_manager"));
 
+    // ---------------------------------------------------------------------------------------
+    // Crafting-progression placeholders. None of these have behaviour yet — they exist so the
+    // recipe chain (container → manager) can resolve its ingredient registry names. Real models,
+    // textures, and (where appropriate) block behaviours will replace them in a later pass.
+    // ---------------------------------------------------------------------------------------
+
+    /** Diamond/obsidian/glass-pane assembly. First step toward the Photon Manager craft. */
+    public static final RegistryObject<Item> PHOTON_MANAGER_CONTAINER = ITEMS.register("photon_manager_container",
+            () -> new TooltipItem(new Item.Properties(), "tooltip.quantumchanneling.photon_manager_container"));
+
+    /** Netherite + gold lattice — the ring around the Manager's contained core. */
+    public static final RegistryObject<Item> DYSON_RING = ITEMS.register("dyson_ring",
+            () -> new TooltipItem(new Item.Properties(), "tooltip.quantumchanneling.dyson_ring"));
+
+    /** Forged-by-hammer top-tier alloy. Recipe ingredient (no behaviour yet). */
+    public static final RegistryObject<Block> STAR_ALLOY_BLOCK = BLOCKS.register("star_alloy_block",
+            () -> new Block(BlockBehaviour.Properties.of()
+                    .mapColor(MapColor.COLOR_LIGHT_GRAY)
+                    .strength(5.0f, 12.0f)
+                    .sound(SoundType.METAL)
+                    .requiresCorrectToolForDrops()));
+
+    public static final RegistryObject<Item> STAR_ALLOY_BLOCK_ITEM = ITEMS.register("star_alloy_block",
+            () -> new com.quantumchanneling.item.PhotonBlockItem(STAR_ALLOY_BLOCK.get(),
+                    new Item.Properties(), "tooltip.quantumchanneling.star_alloy_block"));
+
+    /** Placeable crafting station. Dropping it (or right-clicking a placed one) crushes ingredient
+     *  item entities below it: Nether Star → 2 White Dwarf, White Dwarf → 1 Uncontained Black Hole.
+     *  Block + BlockItem so it can be both placed and held. */
+    public static final RegistryObject<Block> STAR_SHAPERS_HAMMER_BLOCK = BLOCKS.register("star_shapers_hammer",
+            () -> new com.quantumchanneling.block.StarShapersHammerBlock(BlockBehaviour.Properties.of()
+                    .mapColor(MapColor.METAL)
+                    .strength(6.0f, 14.0f)
+                    .sound(SoundType.ANVIL)
+                    .requiresCorrectToolForDrops()));
+
+    public static final RegistryObject<Item> STAR_SHAPERS_HAMMER = ITEMS.register("star_shapers_hammer",
+            () -> new com.quantumchanneling.item.PhotonBlockItem(STAR_SHAPERS_HAMMER_BLOCK.get(),
+                    new Item.Properties().stacksTo(1), "tooltip.quantumchanneling.star_shapers_hammer"));
+
+    /** Intermediate product — what the hammer makes when it smashes a Nether Star. Each White
+     *  Dwarf in turn collapses into an Uncontained Black Hole. Stacks of 16 match the endgame-
+     *  density theme. Renders as a free-floating white-sun shader (no block model). */
+    public static final RegistryObject<Item> WHITE_DWARF = ITEMS.register("white_dwarf",
+            () -> new com.quantumchanneling.item.WhiteDwarfItem(
+                    new Item.Properties().stacksTo(16), "tooltip.quantumchanneling.white_dwarf"));
+
+    /** The volatile core of a Manager — captured singularity in a contained shell. Stacks of 16
+     *  to match White Dwarf, so the late-game progression items share a stack ceiling. Explosion-
+     *  immune so the hammer's own collapse burst doesn't destroy the freshly-spawned drops. */
+    public static final RegistryObject<Item> UNCONTAINED_BLACK_HOLE = ITEMS.register("uncontained_black_hole",
+            () -> new com.quantumchanneling.item.UncontainedBlackHoleItem(
+                    new Item.Properties().stacksTo(16),
+                    "tooltip.quantumchanneling.uncontained_black_hole"));
+
     public static final RegistryObject<BlockEntityType<PhotonEmitterBlockEntity>> PHOTON_EMITTER_BE =
             BLOCK_ENTITIES.register("photon_emitter",
                     () -> BlockEntityType.Builder.of(PhotonEmitterBlockEntity::new, PHOTON_EMITTER.get()).build(null));
@@ -189,6 +244,13 @@ public class QuantumChanneling {
                         output.accept(PHOTON_STORAGE_T4.get());
                         output.accept(PHOTON_STORAGE_T5.get());
                         output.accept(PHOTON_MANAGER_ITEM.get());
+                        // Crafting-progression placeholders.
+                        output.accept(PHOTON_MANAGER_CONTAINER.get());
+                        output.accept(DYSON_RING.get());
+                        output.accept(STAR_ALLOY_BLOCK_ITEM.get());
+                        output.accept(STAR_SHAPERS_HAMMER.get());
+                        output.accept(WHITE_DWARF.get());
+                        output.accept(UNCONTAINED_BLACK_HOLE.get());
                     }).build());
 
     public QuantumChanneling(FMLJavaModLoadingContext context) {
@@ -210,7 +272,7 @@ public class QuantumChanneling {
         // this single conditional reference is the load gate.
         if (net.minecraftforge.fml.ModList.get().isLoaded("mekanism")) {
             com.quantumchanneling.compat.mekanism.MekanismCapAttacher.register();
-            LOGGER.info("Quantum Channeling: Mekanism detected — gas + heat caps active.");
+            LOGGER.info("Quantum Channeling: Mekanism detected — gas caps active.");
         }
 
         // COMMON type so the file lives at config/quantumchanneling-common.toml — locally editable
@@ -255,7 +317,15 @@ public class QuantumChanneling {
     public static class ClientEvents {
         @SubscribeEvent
         public static void onClientSetup(FMLClientSetupEvent event) {
-            event.enqueueWork(() -> MenuScreens.register(PHOTON_NODE_MENU.get(), PhotonNodeScreen::new));
+            event.enqueueWork(() -> {
+                MenuScreens.register(PHOTON_NODE_MENU.get(), PhotonNodeScreen::new);
+                // Manager textures include transparent pixels (midde_pillar.png is a cutout pattern
+                // with ~65% alpha-0 coverage). Without explicit cutout layer registration those
+                // transparent pixels would draw as black garbage in the default SOLID render layer.
+                net.minecraft.client.renderer.ItemBlockRenderTypes.setRenderLayer(
+                        PHOTON_MANAGER.get(),
+                        net.minecraft.client.renderer.RenderType.cutout());
+            });
         }
 
         /**

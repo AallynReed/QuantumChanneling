@@ -130,9 +130,11 @@ public final class FluidTransitHelper {
         if (targets.isEmpty()) return stack;
         if (emitter.getFluidDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
                 && targets.size() > 1) {
+            // Advance only on EXECUTE; peek on SIMULATE so a routed batch moves the cursor once and
+            // both passes agree on the receiver order.
             int start = action.execute()
                     ? emitter.takeFluidRoundRobinIndex(targets.size())
-                    : Math.floorMod(emitter.takeFluidRoundRobinIndex(targets.size()) - 1, targets.size());
+                    : emitter.peekFluidRoundRobinIndex(targets.size());
             List<PhotonReceiverBlockEntity> rotated = new ArrayList<>(targets.size());
             for (int i = 0; i < targets.size(); i++) rotated.add(targets.get((start + i) % targets.size()));
             targets = rotated;
@@ -174,10 +176,11 @@ public final class FluidTransitHelper {
         var level = origin.getLevel();
         if (level == null) return stack;
         Direction[] sides = Direction.values();
-        int startIdx = (origin.getFluidDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN
-                && action.execute())
-                ? origin.takeFluidRoundRobinIndex(sides.length)
-                : 0;
+        int startIdx = 0;
+        if (origin.getFluidDispatch() == com.quantumchanneling.channel.DispatchStrategy.ROUND_ROBIN) {
+            startIdx = action.execute() ? origin.takeFluidRoundRobinIndex(sides.length)
+                                        : origin.peekFluidRoundRobinIndex(sides.length);
+        }
         FluidStack remaining = stack.copy();
         for (int i = 0; i < sides.length; i++) {
             if (remaining.isEmpty()) break;
@@ -246,7 +249,9 @@ public final class FluidTransitHelper {
                     FluidStack taken = src.drain(new FluidStack(peek, wouldMove), IFluidHandler.FluidAction.EXECUTE);
                     if (taken.isEmpty()) continue;
                     FluidStack leftover = pushToReceivers(level.getServer(), emitter, channel, d.subchannelId, taken, IFluidHandler.FluidAction.EXECUTE, sourceBlockPos);
-                    // Drained-but-not-deposited would be a bug, but log-free path: just lose it.
+                    // Return anything the receivers refused to the source tank — never destroy drained
+                    // fluid (mirrors the item path's leftover re-insert).
+                    if (!leftover.isEmpty()) src.fill(leftover, IFluidHandler.FluidAction.EXECUTE);
                     int moved = taken.getAmount() - leftover.getAmount();
                     if (moved > 0) {
                         emitter.recordFluidsRouted(moved);

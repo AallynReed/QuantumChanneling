@@ -2,7 +2,11 @@ package com.quantumchanneling.client.render;
 
 import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormat;
+import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.RenderType;
+import net.minecraft.client.renderer.ShaderInstance;
+
+import java.util.function.Supplier;
 
 /**
  * Render types shared by {@link PhotonNodeRenderer}.
@@ -48,20 +52,42 @@ public class PhotonRenderTypes extends RenderType {
         throw new IllegalStateException("PhotonRenderTypes is a static holder — do not instantiate.");
     }
 
+    /** A failed-load photon shader field reads null; without a guard the render loop NPEs deep in
+     *  the shader bind. Fall back to a stock position/color/tex program so the pass still draws
+     *  (wrong-looking, but no crash). */
+    private static Supplier<ShaderInstance> orStock(Supplier<ShaderInstance> custom) {
+        return () -> {
+            ShaderInstance s = custom.get();
+            return s != null ? s : GameRenderer.getPositionColorTexShader();
+        };
+    }
+
     private static final ShaderStateShard PHOTON_HALO_SHADER =
-            new ShaderStateShard(PhotonShaders::getHaloShader);
+            new ShaderStateShard(orStock(PhotonShaders::getHaloShader));
 
     private static final ShaderStateShard PHOTON_VOID_SHADER =
-            new ShaderStateShard(PhotonShaders::getVoidShader);
+            new ShaderStateShard(orStock(PhotonShaders::getVoidShader));
 
     private static final ShaderStateShard PHOTON_BEAM_SHADER =
-            new ShaderStateShard(PhotonShaders::getBeamShader);
+            new ShaderStateShard(orStock(PhotonShaders::getBeamShader));
 
     private static final ShaderStateShard PHOTON_GYROSCOPE_SHADER =
-            new ShaderStateShard(PhotonShaders::getGyroscopeShader);
+            new ShaderStateShard(orStock(PhotonShaders::getGyroscopeShader));
 
     private static final ShaderStateShard PHOTON_BOLT_SHADER =
-            new ShaderStateShard(PhotonShaders::getBoltShader);
+            new ShaderStateShard(orStock(PhotonShaders::getBoltShader));
+
+    private static final ShaderStateShard PHOTON_IMPLOSION_SHADER =
+            new ShaderStateShard(orStock(PhotonShaders::getImplosionShader));
+
+    private static final ShaderStateShard PHOTON_SUPERNOVA_SHADER =
+            new ShaderStateShard(orStock(PhotonShaders::getSupernovaShader));
+
+    private static final ShaderStateShard PHOTON_REFRACTION_SHADER =
+            new ShaderStateShard(orStock(PhotonShaders::getRefractionShader));
+
+    private static final ShaderStateShard PHOTON_WHITE_DWARF_SHADER =
+            new ShaderStateShard(orStock(PhotonShaders::getWhiteDwarfShader));
 
     /** Bright accretion ring + atmospheric halo. Additive blend; custom shader; writes depth. */
     public static final RenderType PHOTON_HALO = RenderType.create(
@@ -142,6 +168,77 @@ public class PhotonRenderTypes extends RenderType {
                     .setTransparencyState(LIGHTNING_TRANSPARENCY)
                     .setDepthTestState(LEQUAL_DEPTH_TEST)
                     .setWriteMaskState(COLOR_WRITE)
+                    .setCullState(NO_CULL)
+                    .createCompositeState(false));
+
+    /** Phase-1 supernova flash — dedicated white/gold shader (NOT the shared halo, which the
+     *  emitter/receiver/manager black holes use). Depth read + write both off: the flash is a
+     *  transient overlay that should render over everything and never claim depth pixels. */
+    public static final RenderType PHOTON_BURST = RenderType.create(
+            "quantumchanneling:photon_burst",
+            DefaultVertexFormat.POSITION_COLOR_TEX,
+            VertexFormat.Mode.QUADS,
+            2048,
+            false, false,
+            RenderType.CompositeState.builder()
+                    .setShaderState(PHOTON_SUPERNOVA_SHADER)
+                    .setTransparencyState(LIGHTNING_TRANSPARENCY)
+                    .setDepthTestState(NO_DEPTH_TEST)
+                    .setWriteMaskState(COLOR_WRITE)
+                    .setCullState(NO_CULL)
+                    .createCompositeState(false));
+
+    /** Phase-1 refraction beams radiating from the flash. Dedicated white-with-rainbow-fringe
+     *  shader (NOT the shared beam shader used by emitter/receiver). Same depth policy as the
+     *  supernova — additive, no depth read/write. */
+    public static final RenderType PHOTON_RIBBON = RenderType.create(
+            "quantumchanneling:photon_ribbon",
+            DefaultVertexFormat.POSITION_COLOR_TEX,
+            VertexFormat.Mode.QUADS,
+            2048,
+            false, false,
+            RenderType.CompositeState.builder()
+                    .setShaderState(PHOTON_REFRACTION_SHADER)
+                    .setTransparencyState(LIGHTNING_TRANSPARENCY)
+                    .setDepthTestState(NO_DEPTH_TEST)
+                    .setWriteMaskState(COLOR_WRITE)
+                    .setCullState(NO_CULL)
+                    .createCompositeState(false));
+
+    /** Dark swirling implosion vortex — the "after" pair to PHOTON_BURST. Uses the implosion
+     *  shader plus TRANSLUCENT (alpha-blend) transparency so the dark colors actually DARKEN the
+     *  framebuffer instead of brightening it like an additive pass would. Depth read/write both
+     *  off, same reasoning as the burst — it's a transient overlay and shouldn't fight occlusion
+     *  with the world. */
+    public static final RenderType PHOTON_IMPLOSION = RenderType.create(
+            "quantumchanneling:photon_implosion",
+            DefaultVertexFormat.POSITION_COLOR_TEX,
+            VertexFormat.Mode.QUADS,
+            2048,
+            false, false,
+            RenderType.CompositeState.builder()
+                    .setShaderState(PHOTON_IMPLOSION_SHADER)
+                    .setTransparencyState(TRANSLUCENT_TRANSPARENCY)
+                    .setDepthTestState(NO_DEPTH_TEST)
+                    .setWriteMaskState(COLOR_WRITE)
+                    .setCullState(NO_CULL)
+                    .createCompositeState(false));
+
+    /** White Dwarf star — TRANSLUCENT (alpha) blend, not additive. A sun is an opaque body, so the
+     *  disc renders solid (alpha = 1) with the surface texture varying brightness rather than
+     *  transparency; only the corona / glow fades out. Additive blending made the darker surface
+     *  detail let the background show through. */
+    public static final RenderType PHOTON_WHITE_DWARF = RenderType.create(
+            "quantumchanneling:photon_white_dwarf",
+            DefaultVertexFormat.POSITION_COLOR_TEX,
+            VertexFormat.Mode.QUADS,
+            2048,
+            false, false,
+            RenderType.CompositeState.builder()
+                    .setShaderState(PHOTON_WHITE_DWARF_SHADER)
+                    .setTransparencyState(TRANSLUCENT_TRANSPARENCY)
+                    .setDepthTestState(LEQUAL_DEPTH_TEST)
+                    .setWriteMaskState(COLOR_DEPTH_WRITE)
                     .setCullState(NO_CULL)
                     .createCompositeState(false));
 }

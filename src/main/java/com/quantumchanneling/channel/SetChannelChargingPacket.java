@@ -16,8 +16,10 @@ public record SetChannelChargingPacket(UUID id, int slotMask) {
         ctx.enqueueWork(() -> {
             ServerPlayer player = ctx.getSender();
             if (player == null) return;
-            ChannelData.get(player.serverLevel().getServer())
-                    .setChargingSlots(p.id, player.getUUID(), p.slotMask);
+            var server = player.serverLevel().getServer();
+            if (ChannelData.get(server).setChargingSlots(p.id, player.getUUID(), p.slotMask)) {
+                CreateChannelPacket.broadcastListTo(server, p.id);
+            }
             CreateChannelPacket.sendListBackTo(player);
         });
         ctx.setPacketHandled(true);
